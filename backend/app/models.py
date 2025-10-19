@@ -105,3 +105,5 @@ class Booking(Base):
 
     арендатор = relationship("Tenant", backref="брони")
     офис = relationship("Office", backref="брони")
+
+

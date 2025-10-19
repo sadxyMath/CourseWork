@@ -149,3 +149,26 @@ class BookingOut(BookingBase):
 
     class Config:
         from_attributes = True
+
+#Пользователь
+
+class UserCreate(BaseModel):
+    username: constr(min_length=4)
+    password: constr(min_length=6)
+    company_name: str
+    contact_person: str
+    phone: str
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class UserOut(BaseModel):
+    id: int
+    username: str
+    role: str
+    id_арендатора: int | None
+
+    class Config:
+        from_attributes = True
+
