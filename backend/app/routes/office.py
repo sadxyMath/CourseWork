@@ -7,7 +7,7 @@ from backend.app.schemes import OfficeOut, OfficeCreate, OfficeUpdate
 
 router = APIRouter(
     prefix="/offices",
-    tags=["offices"]
+    tags=["Офисы"]
 )
 
 # GET /offices

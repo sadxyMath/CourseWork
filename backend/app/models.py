@@ -34,8 +34,8 @@ class Contract(Base):
     __tablename__ = "договор"
 
     id_договора = Column(Integer, primary_key=True, index=True)
-    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора"), nullable=False)
-    id_офиса = Column(Integer, ForeignKey("офис.id_офиса"), nullable=False)
+    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора", ondelete="CASCADE"), nullable=False)
+    id_офиса = Column(Integer, ForeignKey("офис.id_офиса", ondelete="CASCADE"), nullable=False)
     дата_начала = Column(Date, nullable=False)
     дата_окончания = Column(Date, nullable=False)
     стоимость = Column(Integer, nullable=False)
@@ -52,11 +52,13 @@ class Contract(Base):
     арендатор = relationship("Tenant", backref="договора")
     офис = relationship("Office", backref="договора")
 
+
+
 class Payment(Base):
     __tablename__ = "платеж"
 
     id_платежа = Column(Integer, primary_key=True, index=True)
-    id_договора = Column(Integer, ForeignKey("договор.id_договора"), nullable=False)
+    id_договора = Column(Integer, ForeignKey("договор.id_договора", ondelete="CASCADE"), nullable=False)
     дата_формирования = Column(Date, nullable=False, server_default=func.current_date())
     срок_оплаты = Column(Date, nullable=False)
     сумма = Column(Integer, nullable=False)
@@ -75,7 +77,7 @@ class Request(Base):
     __tablename__ = "заявка"
 
     id_заявки = Column(Integer, primary_key=True, index=True)
-    id_договора = Column(Integer, ForeignKey("договор.id_договора"), nullable=False)
+    id_договора = Column(Integer, ForeignKey("договор.id_договора", ondelete="CASCADE"), nullable=False)
     дата_подачи = Column(Date, nullable=False, server_default=func.current_date())
     статус = Column(String(20), nullable=False)
     текст_заявки = Column(String(500), nullable=False)
@@ -91,8 +93,8 @@ class Booking(Base):
     __tablename__ = "бронь"
 
     id_брони = Column(Integer, primary_key=True, index=True)
-    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора"), nullable=False)
-    id_офиса = Column(Integer, ForeignKey("офис.id_офиса"), nullable=False)
+    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора", ondelete="CASCADE"), nullable=False)
+    id_офиса = Column(Integer, ForeignKey("офис.id_офиса", ondelete="CASCADE"), nullable=False)
     дата_бронирования = Column(Date, nullable=False, server_default=func.current_date())
     начало_брони = Column(Date, nullable=False)
     окончание_брони = Column(Date, nullable=False)
@@ -107,3 +109,17 @@ class Booking(Base):
     офис = relationship("Office", backref="брони")
 
 
+class User(Base):
+    __tablename__ = "пользователь"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String(100), unique=True, nullable=False)  # логин/телефон
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False)  # 'admin' или 'tenant'
+    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора", ondelete="CASCADE"), nullable=True)
+
+    арендатор = relationship("Tenant", backref="user")
+
+    __table_args__ = (
+        CheckConstraint("role IN ('admin','tenant','staff')"),
+    )

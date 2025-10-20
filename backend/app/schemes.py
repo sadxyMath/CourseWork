@@ -157,7 +157,6 @@ class UserCreate(BaseModel):
     password: constr(min_length=6)
     company_name: str
     contact_person: str
-    phone: str
 
 class UserLogin(BaseModel):
     username: str
@@ -165,10 +164,20 @@ class UserLogin(BaseModel):
 
 class UserOut(BaseModel):
     id: int
-    username: str
+    phone: str
     role: str
     id_арендатора: int | None
 
     class Config:
         from_attributes = True
+
+
+# Токен
+class TokenData(BaseModel):
+    id: str
+
+
+class TokenModel(BaseModel):
+    access_token: str
+    token_type: str
 

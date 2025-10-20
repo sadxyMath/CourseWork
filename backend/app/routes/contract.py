@@ -7,7 +7,7 @@ from backend.app.schemes import ContractOut, ContractCreate, ContractUpdate
 
 router = APIRouter(
     prefix="/contracts",
-    tags=["contracts"]
+    tags=["Договоры"]
 )
 
 # GET /contracts

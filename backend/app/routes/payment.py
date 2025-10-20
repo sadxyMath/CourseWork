@@ -9,7 +9,7 @@ from backend.app.schemes import PaymentOut, PaymentCreate, PaymentUpdate
 
 router = APIRouter(
     prefix="/payments",
-    tags=["payments"]
+    tags=["Платежи"]
 )
 
 # 🔸 Получить все платежи
