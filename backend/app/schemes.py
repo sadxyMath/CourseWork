@@ -175,6 +175,7 @@ class UserOut(BaseModel):
 # Токен
 class TokenData(BaseModel):
     id: str
+    role: str
 
 
 class TokenModel(BaseModel):
