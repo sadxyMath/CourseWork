@@ -24,8 +24,11 @@ def create_access_token(data: dict):
 def verify_access_token(token: str, credentials_exception):
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        
         id = payload.get("user_id") 
         role = payload.get("user_role")
+        if id is None and (role == "admin" or role == "staff"):
+            return schemes.TokenDataForPersonal(role=role)
         if id is None:
             raise credentials_exception
         if role is None:

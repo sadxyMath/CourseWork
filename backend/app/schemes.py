@@ -182,3 +182,6 @@ class TokenModel(BaseModel):
     access_token: str
     token_type: str
 
+class TokenDataForPersonal(BaseModel):
+    role: str
+

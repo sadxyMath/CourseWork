@@ -1,7 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
-from typing import List, Optional
-
+from typing import List
 from backend.app import models, schemes
 from backend.app.database import get_db
 from backend.app.dependencies import require_role
@@ -12,7 +11,7 @@ router = APIRouter(
 )
 
 # --------------------------
-# GET all bookings
+# GET /bookings — просмотр всех броней
 # --------------------------
 @router.get("/", response_model=List[schemes.BookingOut])
 def get_all_bookings(
@@ -20,15 +19,19 @@ def get_all_bookings(
     current_user: schemes.TokenData = Depends(require_role(["admin", "tenant", "staff"]))
 ):
     if current_user.role in ["admin", "staff"]:
-        bookings = db.query(models.Booking).all()
+        return db.query(models.Booking).all()
     elif current_user.role == "tenant":
-        bookings = db.query(models.Booking).filter(
+        # арендатор видит только свои брони
+        user_bookings = db.query(models.Booking).filter(
             models.Booking.id_арендатора == current_user.id
         ).all()
-    return bookings
+        if not user_bookings:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="У вас нет забронированных офисов. Чтобы это сделать перейдите по ссылке для просмотра всех офисов")
+        return user_bookings
+
 
 # --------------------------
-# GET single booking
+# GET /bookings/{id} — просмотр конкретной брони
 # --------------------------
 @router.get("/{booking_id}", response_model=schemes.BookingOut)
 def get_booking(
@@ -40,64 +43,63 @@ def get_booking(
     if not booking:
         raise HTTPException(status_code=404, detail="Бронь не найдена")
 
-    if current_user.role == "admin":
-        return booking
-    elif current_user.role == "tenant":
-        if booking.id_арендатора != current_user.id:
-            raise HTTPException(status_code=403, detail="Нет доступа к этой брони")
-        return booking
-    elif current_user.role == "staff":
-        raise HTTPException(status_code=403, detail="Персонал уборки не имеет доступа к бронированиям")
+    # арендатор видит только свою бронь
+    if current_user.role == "tenant" and booking.id_арендатора != current_user.id:
+        raise HTTPException(status_code=403, detail="Нет доступа к этой брони")
+
+    # персонал только смотрит (доступ разрешён)
+    return booking
+
 
 # --------------------------
-# CREATE booking
+# POST /bookings — создание брони
 # --------------------------
 @router.post("/", response_model=schemes.BookingOut, status_code=status.HTTP_201_CREATED)
 def create_booking(
     booking: schemes.BookingCreate,
     db: Session = Depends(get_db),
-    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
-):  
-    office_booked = db.query(models.Booking).filter(models.Booking.id_офиса == booking.id_офиса, models.Booking.id_арендатора == booking.id_арендатора).first()
-    if office_booked:
-        raise HTTPException(status_code=400, detail="Вы уже забронировали этот офис")
-    # Tenant может создавать бронь только для себя
-    if current_user.role == "tenant" and booking.id_арендатора != current_user.id:
-        raise HTTPException(status_code=403, detail="Можно создавать бронь только для себя")
+    current_user: schemes.TokenData = Depends(require_role(["tenant", "admin"]))
+):
+    # tenant может создавать только для себя
+    if current_user.role == "tenant":
+        booking.id_арендатора = current_user.id
 
-    # Проверка существования арендатора (только для admin)
-    if current_user.role == "admin":
-        tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == booking.id_арендатора).first()
-        if not tenant:
-            raise HTTPException(status_code=400, detail="Указанный арендатор не существует")
-
-    # Проверка существования офиса
+    # проверка существования офиса
     office = db.query(models.Office).filter(models.Office.id_офиса == booking.id_офиса).first()
     if not office:
         raise HTTPException(status_code=400, detail="Указанный офис не существует")
 
-    # Логика дат
+    # проверка — не забронировал ли этот арендатор уже этот офис
+    existing = db.query(models.Booking).filter(
+        models.Booking.id_офиса == booking.id_офиса,
+        models.Booking.id_арендатора == booking.id_арендатора
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Вы уже забронировали этот офис")
+
+    # проверка дат
     if booking.окончание_брони < booking.начало_брони:
         raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
 
-    # Проверка на пересечение бронирований
-    conflict = db.query(models.Booking).filter(
+    # проверка пересечения с другими бронями
+    overlap = db.query(models.Booking).filter(
         models.Booking.id_офиса == booking.id_офиса,
         models.Booking.начало_брони < booking.окончание_брони,
         models.Booking.окончание_брони > booking.начало_брони
     ).first()
-    if conflict:
-        raise HTTPException(status_code=400, detail="Офис уже забронирован на указанный период")
-    
-    
+    if overlap:
+        raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
+
+    # создаём бронь
     new_booking = models.Booking(**booking.dict())
     db.add(new_booking)
     db.commit()
     db.refresh(new_booking)
     return new_booking
 
+
 # --------------------------
-# UPDATE booking
+# PUT /bookings/{id} — редактирование брони
 # --------------------------
 @router.put("/{booking_id}", response_model=schemes.BookingOut)
 def update_booking(
@@ -110,31 +112,24 @@ def update_booking(
     if not booking:
         raise HTTPException(status_code=404, detail="Бронь не найдена")
 
+    # tenant может редактировать только свои брони
     if current_user.role == "tenant" and booking.id_арендатора != current_user.id:
         raise HTTPException(status_code=403, detail="Можно редактировать только свои брони")
 
-    # Логика дат
     start_date = updated.начало_брони or booking.начало_брони
     end_date = updated.окончание_брони or booking.окончание_брони
     if end_date < start_date:
         raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
 
-    # Проверка существования офиса если изменяется
-    if updated.id_офиса:
-        office = db.query(models.Office).filter(models.Office.id_офиса == updated.id_офиса).first()
-        if not office:
-            raise HTTPException(status_code=400, detail="Указанный офис не существует")
-
-    # Проверка на пересечение бронирований
-    office_id = updated.id_офиса or booking.id_офиса
+    # проверка пересечения
     conflict = db.query(models.Booking).filter(
-        models.Booking.id_офиса == office_id,
+        models.Booking.id_офиса == booking.id_офиса,
         models.Booking.id_брони != booking_id,
         models.Booking.начало_брони < end_date,
         models.Booking.окончание_брони > start_date
     ).first()
     if conflict:
-        raise HTTPException(status_code=400, detail="Офис уже забронирован на указанный период")
+        raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
 
     for key, value in updated.dict(exclude_unset=True).items():
         setattr(booking, key, value)
@@ -143,8 +138,9 @@ def update_booking(
     db.refresh(booking)
     return booking
 
+
 # --------------------------
-# DELETE booking
+# DELETE /bookings/{id} — удаление брони
 # --------------------------
 @router.delete("/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_booking(
