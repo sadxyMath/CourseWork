@@ -60,9 +60,8 @@ def create_booking(
     db: Session = Depends(get_db),
     current_user: schemes.TokenData = Depends(require_role(["tenant", "admin"]))
 ):
-    # tenant может создавать только для себя
-    if current_user.role == "tenant":
-        booking.id_арендатора = current_user.id
+    # tenant может создавать только для себя, admin может для любого
+    tenant_id = current_user.id
 
     # проверка существования офиса
     office = db.query(models.Office).filter(models.Office.id_офиса == booking.id_офиса).first()
@@ -72,7 +71,7 @@ def create_booking(
     # проверка — не забронировал ли этот арендатор уже этот офис
     existing = db.query(models.Booking).filter(
         models.Booking.id_офиса == booking.id_офиса,
-        models.Booking.id_арендатора == booking.id_арендатора
+        models.Booking.id_арендатора == tenant_id
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Вы уже забронировали этот офис")
@@ -91,7 +90,10 @@ def create_booking(
         raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
 
     # создаём бронь
-    new_booking = models.Booking(**booking.dict())
+    new_booking = models.Booking(
+        id_арендатора=tenant_id,
+        **booking.dict()
+    )
     db.add(new_booking)
     db.commit()
     db.refresh(new_booking)
@@ -113,7 +115,7 @@ def update_booking(
         raise HTTPException(status_code=404, detail="Бронь не найдена")
 
     # tenant может редактировать только свои брони
-    if current_user.role == "tenant" and booking.id_арендатора != current_user.id:
+    if current_user.role == "tenant" and booking.id_арендатора != int(current_user.id):
         raise HTTPException(status_code=403, detail="Можно редактировать только свои брони")
 
     start_date = updated.начало_брони or booking.начало_брони
@@ -152,7 +154,7 @@ def delete_booking(
     if not booking:
         raise HTTPException(status_code=404, detail="Бронь не найдена")
 
-    if current_user.role == "tenant" and booking.id_арендатора != current_user.id:
+    if current_user.role == "tenant" and booking.id_арендатора != int(current_user.id):
         raise HTTPException(status_code=403, detail="Можно удалять только свои брони")
 
     db.delete(booking)

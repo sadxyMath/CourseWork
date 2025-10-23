@@ -135,8 +135,11 @@ class BookingBase(BaseModel):
     окончание_брони: date
     статус: constr(max_length=20)
 
-class BookingCreate(BookingBase):
-    pass
+class BookingCreate(BaseModel):
+    id_офиса: int
+    начало_брони: date
+    окончание_брони: date
+    статус: constr(max_length=20)
 
 class BookingUpdate(BaseModel):
     начало_брони: Optional[date]
