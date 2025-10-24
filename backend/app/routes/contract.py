@@ -17,13 +17,13 @@ router = APIRouter(
 @router.get("/", response_model=List[schemes.ContractOut])
 def get_contracts(
     db: Session = Depends(get_db),
-    current_user=Depends(require_role(["admin", "tenant"]))
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
 ):
     if current_user.role == "admin":
         return db.query(models.Contract).all()
     elif current_user.role == "tenant":
         return db.query(models.Contract).filter(
-            models.Contract.id_арендатора == current_user.id
+            models.Contract.id_арендатора == current_user.tenant_id
         ).all()
 
 
@@ -34,18 +34,17 @@ def get_contracts(
 def get_contract(
     contract_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role(["admin", "tenant"]))
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
 ):
     contract = db.query(models.Contract).filter(models.Contract.id_договора == contract_id).first()
     if not contract:
         raise HTTPException(status_code=404, detail="Договор не найден")
 
-    if current_user.role == "admin":
-        return contract
-    elif current_user.role == "tenant":
-        if contract.id_арендатора != current_user.id:
-            raise HTTPException(status_code=403, detail="Нет доступа к этому договору")
-        return contract
+    # Проверка доступа
+    if current_user.role == "tenant" and contract.id_арендатора != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Нет доступа к этому договору")
+
+    return contract
 
 
 # =======================
@@ -56,7 +55,7 @@ def get_contract(
 def create_contract(
     contract: schemes.ContractCreate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role(["admin"]))
+    current_user: schemes.TokenData = Depends(require_role(["admin"]))
 ):
     # Проверка офиса
     office = db.query(models.Office).filter(models.Office.id_офиса == contract.id_офиса).first()
@@ -94,7 +93,7 @@ def update_contract(
     contract_id: int,
     updated: schemes.ContractUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role(["admin"]))
+    current_user: schemes.TokenData = Depends(require_role(["admin"]))
 ):
     db_contract = db.query(models.Contract).filter(models.Contract.id_договора == contract_id).first()
     if not db_contract:
@@ -122,14 +121,14 @@ def update_contract(
 def delete_contract(
     contract_id: int,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role(["admin"]))
+    current_user: schemes.TokenData = Depends(require_role(["admin"]))
 ):
     db_contract = db.query(models.Contract).filter(models.Contract.id_договора == contract_id).first()
     if not db_contract:
         raise HTTPException(status_code=404, detail="Договор не найден")
 
-    # Освобождаем офис
-    if db_contract.офис:
+    # Освобождаем офис, если связан
+    if hasattr(db_contract, "офис") and db_contract.офис:
         db_contract.офис.статус = "свободен"
 
     db.delete(db_contract)

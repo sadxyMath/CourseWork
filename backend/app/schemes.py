@@ -175,11 +175,11 @@ class UserOut(BaseModel):
         from_attributes = True
 
 
-# Токен
+ #Токен
 class TokenData(BaseModel):
-    id: str
+    id: int
     role: str
-
+    tenant_id: Optional[int] = None
 
 class TokenModel(BaseModel):
     access_token: str

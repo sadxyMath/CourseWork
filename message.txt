@@ -1,0 +1,1250 @@
+from fastapi import APIRouter, HTTPException, status, Depends
+from sqlalchemy.orm import Session
+from fastapi.security.oauth2 import OAuth2PasswordRequestForm
+from backend.app import database, schemes, models, utils, oauth2
+
+router = APIRouter(tags=["Логин"])
+
+@router.post("/login", response_model=schemes.TokenModel)
+def login(
+    user_credentials: OAuth2PasswordRequestForm = Depends(),
+    db: Session = Depends(database.get_db)
+):
+    # Находим пользователя по телефону
+    user = db.query(models.User).filter(models.User.phone == user_credentials.username).first()
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверные учётные данные"
+        )
+
+    # Проверяем пароль
+    if not utils.verify(user_credentials.password, user.hashed_password):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Неверные учётные данные"
+        )
+
+    # Генерируем токен (включаем tenant_id)
+    access_token = oauth2.create_access_token(data={
+        "user_id": user.id,
+        "tenant_id": user.id_арендатора,  # может быть None для админов/сотрудников
+        "user_role": user.role
+    })
+
+    return {"access_token": access_token, "token_type": "bearer"}
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import List
+from backend.app import models, schemes
+from backend.app.database import get_db
+from backend.app.dependencies import require_role
+
+router = APIRouter(
+    prefix="/bookings",
+    tags=["Брони"],
+)
+
+@router.get("/", response_model=List[schemes.BookingOut])
+def get_all_bookings(
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant", "staff"]))
+):
+    if current_user.role in ["admin", "staff"]:
+        return db.query(models.Booking).all()
+    elif current_user.role == "tenant":
+        tenant_id = current_user.tenant_id
+        user_bookings = db.query(models.Booking).filter(
+            models.Booking.id_арендатора == tenant_id
+        ).all()
+        if not user_bookings:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="У вас нет забронированных офисов. Чтобы это сделать, перейдите к просмотру офисов"
+            )
+        return user_bookings
+
+
+@router.post("/", response_model=schemes.BookingOut, status_code=status.HTTP_201_CREATED)
+def create_booking(
+    booking: schemes.BookingCreate,
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["tenant", "admin"]))
+):
+    tenant_id = current_user.tenant_id if current_user.role == "tenant" else booking.id_арендатора
+
+    office = db.query(models.Office).filter(models.Office.id_офиса == booking.id_офиса).first()
+    if not office:
+        raise HTTPException(status_code=400, detail="Указанный офис не существует")
+
+    existing = db.query(models.Booking).filter(
+        models.Booking.id_офиса == booking.id_офиса,
+        models.Booking.id_арендатора == tenant_id
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Вы уже забронировали этот офис")
+
+    if booking.окончание_брони < booking.начало_брони:
+        raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
+
+    overlap = db.query(models.Booking).filter(
+        models.Booking.id_офиса == booking.id_офиса,
+        models.Booking.начало_брони < booking.окончание_брони,
+        models.Booking.окончание_брони > booking.начало_брони
+    ).first()
+    if overlap:
+        raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
+
+    new_booking = models.Booking(
+        id_арендатора=tenant_id,
+        **booking.dict()
+    )
+    db.add(new_booking)
+    db.commit()
+    db.refresh(new_booking)
+    return new_booking
+
+
+@router.put("/{booking_id}", response_model=schemes.BookingOut)
+def update_booking(
+    booking_id: int,
+    updated: schemes.BookingUpdate,
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
+):
+    booking = db.query(models.Booking).filter(models.Booking.id_брони == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Бронь не найдена")
+
+    if current_user.role == "tenant" and booking.id_арендатора != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Можно редактировать только свои брони")
+
+    start_date = updated.начало_брони or booking.начало_брони
+    end_date = updated.окончание_брони or booking.окончание_брони
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
+
+    conflict = db.query(models.Booking).filter(
+        models.Booking.id_офиса == booking.id_офиса,
+        models.Booking.id_брони != booking_id,
+        models.Booking.начало_брони < end_date,
+        models.Booking.окончание_брони > start_date
+    ).first()
+    if conflict:
+        raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
+
+    for key, value in updated.dict(exclude_unset=True).items():
+        setattr(booking, key, value)
+
+    db.commit()
+    db.refresh(booking)
+    return booking
+
+
+@router.delete("/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_booking(
+    booking_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
+):
+    booking = db.query(models.Booking).filter(models.Booking.id_брони == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Бронь не найдена")
+
+    if current_user.role == "tenant" and booking.id_арендатора != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Можно удалять только свои брони")
+
+    db.delete(booking)
+    db.commit()
+    return None
+
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import List
+
+from backend.app import models, schemes
+from backend.app.database import get_db
+from backend.app.dependencies import require_role
+
+router = APIRouter(
+    prefix="/contracts",
+    tags=["Договоры"],
+)
+
+# =======================
+# GET /contracts — просмотр всех договоров
+# =======================
+@router.get("/", response_model=List[schemes.ContractOut])
+def get_contracts(
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
+):
+    if current_user.role == "admin":
+        return db.query(models.Contract).all()
+    elif current_user.role == "tenant":
+        return db.query(models.Contract).filter(
+            models.Contract.id_арендатора == current_user.tenant_id
+        ).all()
+
+
+# =======================
+# GET /contracts/{id} — просмотр конкретного договора
+# =======================
+@router.get("/{contract_id}", response_model=schemes.ContractOut)
+def get_contract(
+    contract_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
+):
+    contract = db.query(models.Contract).filter(models.Contract.id_договора == contract_id).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Договор не найден")
+
+    # Проверка доступа
+    if current_user.role == "tenant" and contract.id_арендатора != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Нет доступа к этому договору")
+
+    return contract
+
+
+# =======================
+# POST /contracts — создание договора
+# (только admin)
+# =======================
+@router.post("/", response_model=schemes.ContractOut, status_code=status.HTTP_201_CREATED)
+def create_contract(
+    contract: schemes.ContractCreate,
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin"]))
+):
+    # Проверка офиса
+    office = db.query(models.Office).filter(models.Office.id_офиса == contract.id_офиса).first()
+    if not office:
+        raise HTTPException(status_code=404, detail="Офис не найден")
+    if office.статус != "свободен":
+        raise HTTPException(status_code=400, detail="Офис уже недоступен для аренды")
+
+    # Проверка арендатора
+    tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == contract.id_арендатора).first()
+    if not tenant:
+        raise HTTPException(status_code=400, detail="Арендатор не найден")
+
+    # Проверка логики дат
+    if contract.дата_окончания < contract.дата_начала:
+        raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
+
+    db_contract = models.Contract(**contract.dict())
+    db.add(db_contract)
+
+    # Меняем статус офиса
+    office.статус = "арендуется"
+
+    db.commit()
+    db.refresh(db_contract)
+    return db_contract
+
+
+# =======================
+# PUT /contracts/{id} — редактирование договора
+# (только admin)
+# =======================
+@router.put("/{contract_id}", response_model=schemes.ContractOut)
+def update_contract(
+    contract_id: int,
+    updated: schemes.ContractUpdate,
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin"]))
+):
+    db_contract = db.query(models.Contract).filter(models.Contract.id_договора == contract_id).first()
+    if not db_contract:
+        raise HTTPException(status_code=404, detail="Договор не найден")
+
+    # Проверка логики дат
+    start = updated.дата_начала or db_contract.дата_начала
+    end = updated.дата_окончания or db_contract.дата_окончания
+    if end < start:
+        raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
+
+    for key, value in updated.dict(exclude_unset=True).items():
+        setattr(db_contract, key, value)
+
+    db.commit()
+    db.refresh(db_contract)
+    return db_contract
+
+
+# =======================
+# DELETE /contracts/{id} — удаление договора
+# (только admin)
+# =======================
+@router.delete("/{contract_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_contract(
+    contract_id: int,
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin"]))
+):
+    db_contract = db.query(models.Contract).filter(models.Contract.id_договора == contract_id).first()
+    if not db_contract:
+        raise HTTPException(status_code=404, detail="Договор не найден")
+
+    # Освобождаем офис, если связан
+    if hasattr(db_contract, "офис") and db_contract.офис:
+        db_contract.офис.статус = "свободен"
+
+    db.delete(db_contract)
+    db.commit()
+    return None
+
+
+from fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.orm import Session
+from typing import List, Optional
+
+from backend.app.database import get_db
+from backend.app.models import Office
+from backend.app.schemes import OfficeOut, OfficeCreate, OfficeUpdate
+from backend.app.dependencies import require_role
+
+router = APIRouter(
+    prefix="/offices",
+    tags=["Офисы"]
+)
+
+# --------------------------
+# GET all offices (с фильтрами)
+# --------------------------
+@router.get("/", response_model=List[OfficeOut])
+def get_offices(
+    status: Optional[str] = Query(None, description="Фильтр по статусу офиса (свободен/арендуется)"),
+    floor: Optional[int] = Query(None, description="Фильтр по этажу"),
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin", "tenant", "staff"]))
+):
+    query = db.query(Office)
+
+    if status:
+        query = query.filter(Office.статус == status)
+    if floor:
+        query = query.filter(Office.этаж == floor)
+
+    offices = query.all()
+    if not offices:
+        raise HTTPException(status_code=404, detail="Офисы не найдены")
+    return offices
+
+
+# --------------------------
+# GET single office
+# --------------------------
+@router.get("/{office_id}", response_model=OfficeOut)
+def get_office(
+    office_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin", "tenant", "staff"]))
+):
+    office = db.query(Office).filter(Office.id_офиса == office_id).first()
+    if not office:
+        raise HTTPException(status_code=404, detail="Офис не найден")
+    return office
+
+
+# --------------------------
+# CREATE office (только admin)
+# --------------------------
+@router.post("/", response_model=OfficeOut, status_code=status.HTTP_201_CREATED)
+def create_office(
+    office: OfficeCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    existing_office = db.query(Office).filter(Office.номер_офиса == office.номер_офиса).first()
+    if existing_office:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Такой офис уже существует")
+
+    db_office = Office(**office.dict())
+    db.add(db_office)
+    db.commit()
+    db.refresh(db_office)
+    return db_office
+
+
+# --------------------------
+# UPDATE office (только admin)
+# --------------------------
+@router.put("/{office_id}", response_model=OfficeOut)
+def update_office(
+    office_id: int,
+    office: OfficeUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    db_office = db.query(Office).filter(Office.id_офиса == office_id).first()
+    if not db_office:
+        raise HTTPException(status_code=404, detail="Офис не найден")
+
+    for key, value in office.dict(exclude_unset=True).items():
+        setattr(db_office, key, value)
+
+    db.commit()
+    db.refresh(db_office)
+    return db_office
+
+
+# --------------------------
+# DELETE office (только admin)
+# --------------------------
+@router.delete("/{office_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_office(
+    office_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    db_office = db.query(Office).filter(Office.id_офиса == office_id).first()
+    if not db_office:
+        raise HTTPException(status_code=404, detail="Офис не найден")
+
+    db.delete(db_office)
+    db.commit()
+    return None
+    
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from typing import List
+from datetime import date
+
+from backend.app.database import get_db
+from backend.app.models import Payment, Contract
+from backend.app.schemes import PaymentOut, PaymentCreate, PaymentUpdate
+from backend.app.dependencies import require_role
+
+router = APIRouter(
+    prefix="/payments",
+    tags=["Платежи"]
+)
+
+# 🔹 Получить все платежи
+@router.get("/", response_model=List[PaymentOut])
+def get_payments(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin", "tenant", "staff"]))
+):
+    if current_user.role in ["admin", "staff"]:
+        return db.query(Payment).all()
+
+    # tenant видит только свои платежи
+    return (
+        db.query(Payment)
+        .join(Contract)
+        .filter(Contract.id_арендатора == current_user.tenant_id)
+        .all()
+    )
+
+
+# 🔹 Получить один платеж
+@router.get("/{payment_id}", response_model=PaymentOut)
+def get_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin", "tenant", "staff"]))
+):
+    payment = db.query(Payment).filter(Payment.id_платежа == payment_id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Платеж не найден")
+
+    # Проверяем доступ арендатора
+    if current_user.role == "tenant":
+        contract = db.query(Contract).filter(Contract.id_договора == payment.id_договора).first()
+        if not contract or contract.id_арендатора != current_user.tenant_id:
+            raise HTTPException(status_code=403, detail="Нет доступа к этому платежу")
+
+    return payment
+
+
+# 🔹 Создать платеж
+@router.post("/", response_model=PaymentOut, status_code=status.HTTP_201_CREATED)
+def create_payment(
+    payment: PaymentCreate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin", "tenant"]))
+):
+    contract = db.query(Contract).filter(Contract.id_договора == payment.id_договора).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Договор не найден")
+
+    if current_user.role == "tenant" and contract.id_арендатора != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Можно создавать платеж только для своих договоров")
+
+    if payment.дата_платежа < contract.дата_начала:
+        raise HTTPException(status_code=400, detail="Дата платежа не может быть раньше даты начала договора")
+
+    if contract.статус == "расторгнут":
+        raise HTTPException(status_code=400, detail="Нельзя добавить платеж к расторгнутому договору")
+
+    db_payment = Payment(**payment.dict())
+    db.add(db_payment)
+    db.commit()
+    db.refresh(db_payment)
+    return db_payment
+
+
+# 🔹 Обновить платеж — только admin
+@router.put("/{payment_id}", response_model=PaymentOut)
+def update_payment(
+    payment_id: int,
+    payment: PaymentUpdate,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    db_payment = db.query(Payment).filter(Payment.id_платежа == payment_id).first()
+    if not db_payment:
+        raise HTTPException(status_code=404, detail="Платеж не найден")
+
+    for key, value in payment.dict(exclude_unset=True).items():
+        setattr(db_payment, key, value)
+
+    db.commit()
+    db.refresh(db_payment)
+    return db_payment
+
+
+# 🔹 Удалить платеж — только admin
+@router.delete("/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_payment(
+    payment_id: int,
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    db_payment = db.query(Payment).filter(Payment.id_платежа == payment_id).first()
+    if not db_payment:
+        raise HTTPException(status_code=404, detail="Платеж не найден")
+
+    db.delete(db_payment)
+    db.commit()
+    return None
+
+
+# 🔹 Проверить просроченные платежи — admin и staff
+@router.post("/check-overdue", response_model=dict)
+def check_overdue_payments(
+    db: Session = Depends(get_db),
+    current_user = Depends(require_role(["admin", "staff"]))
+):
+    today = date.today()
+    overdue = (
+        db.query(Payment)
+        .filter(Payment.дата_платежа < today, Payment.статус == "не оплачен")
+        .all()
+    )
+
+    for pay in overdue:
+        pay.статус = "просрочен"
+
+    db.commit()
+    return {"detail": f"Обновлено {len(overdue)} просроченных платежей"}
+
+
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.orm import Session
+from backend.app.database import get_db
+from backend.app.models import User, Tenant
+from backend.app.schemes import UserCreate
+from backend.app import utils, oauth2
+
+router = APIRouter(
+    tags=["Регистрация"]
+)
+
+@router.post("/register", status_code=status.HTTP_201_CREATED)
+def register(user_data: UserCreate, db: Session = Depends(get_db)):
+    # Проверка уникальности username/телефона
+    existing_user = db.query(User).filter(User.phone == user_data.username).first()
+    if existing_user:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Пользователь с таким телефоном уже существует")
+
+    # Проверка существующего арендатора
+    existing_tenant = db.query(Tenant).filter(
+        Tenant.контактное_лицо == user_data.contact_person,
+        Tenant.название_компании == user_data.company_name
+    ).first()
+    if existing_tenant:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Арендатор с таким именем и названием компании уже существует")
+
+    # Создаём арендатора
+    tenant = Tenant(
+        название_компании=user_data.company_name,
+        контактное_лицо=user_data.contact_person,
+        телефон=user_data.username
+    )
+    db.add(tenant)
+    db.commit()
+    db.refresh(tenant)
+
+    # Создаём пользователя
+    user = User(
+        phone=user_data.username,
+        hashed_password=utils.hash(user_data.password),
+        role="tenant",
+        id_арендатора=tenant.id_арендатора
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    # Генерируем токен с tenant_id
+    access_token = oauth2.create_access_token(
+        data={
+            "user_id": user.id,
+            "tenant_id": user.id_арендатора,
+            "user_role": user.role
+        }
+    )
+
+    return {
+        "access_token": access_token,
+        "token_type": "bearer",
+        "user": {
+            "id": user.id,
+            "phone": user.phone,
+            "role": user.role,
+            "tenant_id": user.id_арендатора
+        }
+    }
+
+
+ffrom fastapi import APIRouter, Depends, HTTPException, status, Query
+from sqlalchemy.orm import Session
+from typing import List, Optional
+from datetime import date
+
+from backend.app.database import get_db
+from backend.app.models import Request, Contract, Office
+from backend.app.schemes import RequestOut, RequestCreate, RequestUpdate
+from backend.app.dependencies import require_role
+
+router = APIRouter(
+    prefix="/requests",
+    tags=["Заявки"]
+)
+
+# --------------------------
+# GET all requests с фильтрами
+# --------------------------
+@router.get("/", response_model=List[RequestOut])
+def get_all_requests(
+    status: Optional[str] = Query(None, description="Фильтр по статусу заявки"),
+    contract_id: Optional[int] = Query(None, description="Фильтр по ID договора"),
+    date_from: Optional[date] = Query(None),
+    date_to: Optional[date] = Query(None),
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(["admin", "tenant", "staff"]))
+):
+    query = db.query(Request)
+
+    if current_user.role == "tenant":
+        query = query.join(Contract).filter(Contract.id_арендатора == current_user.id)
+
+    if status:
+        query = query.filter(Request.статус == status)
+    if contract_id:
+        query = query.filter(Request.id_договора == contract_id)
+    if date_from:
+        query = query.filter(Request.дата_подачи >= date_from)
+    if date_to:
+        query = query.filter(Request.дата_подачи <= date_to)
+
+    return query.all()
+
+# --------------------------
+# GET single request с info о договоре и офисе
+# --------------------------
+@router.get("/{request_id}", response_model=RequestOut)
+def get_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(["admin", "tenant", "staff"]))
+):
+    req = db.query(Request).filter(Request.id_заявки == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+
+    if current_user.role == "tenant" and req.договор.id_арендатора != current_user.id:
+        raise HTTPException(status_code=403, detail="Нет доступа к этой заявке")
+
+    # Подгружаем информацию о договоре и офисе
+    req.офис = req.договор.офис if hasattr(req.договор, "офис") else None
+
+    return req
+
+# --------------------------
+# CREATE request
+# --------------------------
+@router.post("/", response_model=RequestOut, status_code=status.HTTP_201_CREATED)
+def create_request(
+    request: RequestCreate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(["admin", "tenant"]))
+):
+    contract = db.query(Contract).filter(Contract.id_договора == request.id_договора).first()
+    if not contract:
+        raise HTTPException(status_code=404, detail="Договор не найден")
+
+    if current_user.role == "tenant" and contract.id_арендатора != current_user.id:
+        raise HTTPException(status_code=403, detail="Можно создавать заявки только для своих договоров")
+
+    new_request = Request(**request.dict())
+    db.add(new_request)
+    db.commit()
+    db.refresh(new_request)
+    return new_request
+
+# --------------------------
+# UPDATE request
+# --------------------------
+@router.put("/{request_id}", response_model=RequestOut)
+def update_request(
+    request_id: int,
+    updated: RequestUpdate,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(["admin", "tenant", "staff"]))
+):
+    req = db.query(Request).filter(Request.id_заявки == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+
+    # Tenant может менять только свои заявки, кроме статуса
+    if current_user.role == "tenant":
+        if req.договор.id_арендатора != current_user.id:
+            raise HTTPException(status_code=403, detail="Можно редактировать только свои заявки")
+        for key, value in updated.dict(exclude_unset=True).items():
+            if key != "статус":
+                setattr(req, key, value)
+    # Staff может менять только статус
+    elif current_user.role == "staff":
+        if updated.статус is None:
+            raise HTTPException(status_code=403, detail="Можно изменять только статус заявки")
+        req.статус = updated.статус
+    # Admin может менять всё
+    else:
+        for key, value in updated.dict(exclude_unset=True).items():
+            setattr(req, key, value)
+
+    db.commit()
+    db.refresh(req)
+    return req
+
+# --------------------------
+# DELETE request
+# --------------------------
+@router.delete("/{request_id}", status_code=status.HTTP_200_OK)
+def delete_request(
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_role(["admin", "tenant"]))
+):
+    req = db.query(Request).filter(Request.id_заявки == request_id).first()
+    if not req:
+        raise HTTPException(status_code=404, detail="Заявка не найдена")
+
+    if current_user.role == "tenant" and req.договор.id_арендатора != current_user.id:
+        raise HTTPException(status_code=403, detail="Можно удалять только свои заявки")
+
+    db.delete(req)
+    db.commit()
+    return {"detail": "Заявка удалена"}
+
+
+from fastapi import APIRouter, HTTPException, status, Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import or_
+from typing import List, Optional
+from backend.app import models, schemes, database
+from backend.app.dependencies import require_role
+
+router = APIRouter(
+    prefix="/tenants",
+    tags=["Арендаторы"]
+)
+
+# --------------------------
+# GET /tenants — список арендаторов с фильтрами
+# --------------------------
+@router.get("/", response_model=List[schemes.TenantOut])
+def get_all_tenants(
+    name: Optional[str] = None,
+    phone: Optional[str] = None,
+    db: Session = Depends(database.get_db),
+    current_user = Depends(require_role(["admin", "staff"]))
+):
+    query = db.query(models.Tenant)
+    if name:
+        query = query.filter(
+            or_(
+                models.Tenant.название_компании.ilike(f"%{name}%"),
+                models.Tenant.контактное_лицо.ilike(f"%{name}%")
+            )
+        )
+    if phone:
+        query = query.filter(models.Tenant.телефон.ilike(f"%{phone}%"))
+    return query.all()
+
+# --------------------------
+# GET /tenants/{id} — конкретный арендатор
+# --------------------------
+@router.get("/{tenant_id}", response_model=schemes.TenantOut)
+def get_tenant(
+    tenant_id: int,
+    db: Session = Depends(database.get_db),
+    current_user = Depends(require_role(["admin", "staff"]))
+):
+    tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == tenant_id).first()
+    if not tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return tenant
+
+# --------------------------
+# POST /tenants — создать арендатора
+# --------------------------
+@router.post("/", response_model=schemes.TenantOut, status_code=status.HTTP_201_CREATED)
+def create_tenant(
+    tenant: schemes.TenantCreate,
+    db: Session = Depends(database.get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    # проверка уникальности телефона и названия компании
+    existing = db.query(models.Tenant).filter(
+        or_(
+            models.Tenant.телефон == tenant.телефон,
+            models.Tenant.название_компании == tenant.название_компании
+        )
+    ).first()
+    if existing:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT,
+                            detail="Арендатор с таким телефоном или названием компании уже существует")
+
+    db_tenant = models.Tenant(**tenant.dict())
+    db.add(db_tenant)
+    db.commit()
+    db.refresh(db_tenant)
+    return db_tenant
+
+# --------------------------
+# PUT /tenants/{id} — обновить арендатора
+# --------------------------
+@router.put("/{tenant_id}", response_model=schemes.TenantOut)
+def update_tenant(
+    tenant_id: int,
+    tenant: schemes.TenantUpdate,
+    db: Session = Depends(database.get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    db_tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == tenant_id).first()
+    if not db_tenant:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+
+    # проверка уникальности телефона
+    if tenant.телефон:
+        existing_phone = db.query(models.Tenant).filter(
+            models.Tenant.телефон == tenant.телефон,
+            models.Tenant.id_арендатора != tenant_id
+        ).first()
+        if existing_phone:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Телефон уже используется")
+
+    # проверка уникальности названия компании
+    if tenant.название_компании:
+        existing_name = db.query(models.Tenant).filter(
+            models.Tenant.название_компании == tenant.название_компании,
+            models.Tenant.id_арендатора != tenant_id
+        ).first()
+        if existing_name:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Название компании уже используется")
+
+    for key, value in tenant.dict(exclude_unset=True).items():
+        setattr(db_tenant, key, value)
+
+    db.commit()
+    db.refresh(db_tenant)
+    return db_tenant
+
+
+# --------------------------
+# DELETE /tenants/{id} — удалить арендатора
+# --------------------------
+@router.delete("/{tenant_id}", response_model=dict)
+def delete_tenant(
+    tenant_id: int,
+    db: Session = Depends(database.get_db),
+    current_user = Depends(require_role(["admin"]))
+):
+    db_tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == tenant_id).first()
+    if not db_tenant:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+
+    db.delete(db_tenant)
+    db.commit()
+    return {"detail": "Арендатор удалён"}
+
+
+from jose import JWTError, jwt
+from datetime import datetime, timedelta
+from fastapi import Depends, status, HTTPException
+from fastapi.security import OAuth2PasswordBearer
+from backend.app import schemes
+from backend.app.config import settings
+
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="login")
+
+SECRET_KEY = settings.secret_key
+ALGORITHM = settings.algorithm
+ACCESS_TOKEN_EXPIRE_MINUTES = settings.access_token_expire_minutes
+
+
+def create_access_token(data: dict):
+    to_encode = data.copy()
+    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    to_encode.update({"exp": expire})
+    return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
+
+
+def verify_access_token(token: str, credentials_exception):
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+        user_id = payload.get("user_id")
+        tenant_id = payload.get("tenant_id")
+        role = payload.get("user_role")
+
+        if user_id is None or role is None:
+            raise credentials_exception
+
+        return schemes.TokenData(id=int(user_id), role=role, tenant_id=tenant_id)
+    except JWTError:
+        raise credentials_exception
+
+
+
+def get_current_user(token: str = Depends(oauth2_scheme)):
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Не удалось подтвердить учетные данные",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    return verify_access_token(token, credentials_exception)
+
+
+from pydantic import BaseModel, Field, constr, conint
+from datetime import date
+from typing import Optional, List
+
+
+# Арендатор
+
+class TenantBase(BaseModel):
+    название_компании: constr(max_length=100)
+    контактное_лицо: constr(max_length=100)
+    телефон: constr(max_length=20)
+
+class TenantCreate(TenantBase):
+    pass
+
+class TenantUpdate(BaseModel):
+    название_компании: Optional[constr(max_length=100)]
+    контактное_лицо: Optional[constr(max_length=100)]
+    телефон: Optional[constr(max_length=20)]
+
+class TenantOut(TenantBase):
+    id_арендатора: int
+    дата_регистрации: date
+
+    class Config:
+        from_attributes = True
+
+
+# Офис
+
+class OfficeBase(BaseModel):
+    номер_офиса: constr(max_length=10)
+    этаж: conint(ge=1)
+    площадь: conint(gt=0)
+    стоимость: conint(gt=0)
+    статус: constr(max_length=20)
+
+class OfficeCreate(OfficeBase):
+    pass
+
+class OfficeUpdate(BaseModel):
+    номер_офиса: Optional[constr(max_length=10)]
+    этаж: Optional[conint(ge=1)]
+    площадь: Optional[conint(gt=0)]
+    стоимость: Optional[conint(gt=0)]
+    статус: Optional[constr(max_length=20)]
+
+class OfficeOut(OfficeBase):
+    id_офиса: int
+
+    class Config:
+        from_attributes = True
+
+
+# Договор
+
+class ContractBase(BaseModel):
+    id_арендатора: int
+    id_офиса: int
+    дата_начала: date
+    дата_окончания: date
+    стоимость: conint(gt=0)
+    статус: constr(max_length=20)
+
+class ContractCreate(ContractBase):
+    pass
+
+class ContractUpdate(BaseModel):
+    дата_начала: Optional[date]
+    дата_окончания: Optional[date]
+    стоимость: Optional[conint(gt=0)]
+    статус: Optional[constr(max_length=20)]
+
+class ContractOut(ContractBase):
+    id_договора: int
+    дата_заключения: date
+    class Config:
+        from_attributes = True
+
+
+# Платёж
+
+class PaymentBase(BaseModel):
+    id_договора: int
+    срок_оплаты: date
+    сумма: conint(gt=0)
+    статус: constr(max_length=20)
+    дата_платежа: Optional[date]
+
+class PaymentCreate(PaymentBase):
+    pass
+
+class PaymentUpdate(BaseModel):
+    срок_оплаты: Optional[date]
+    сумма: Optional[conint(gt=0)]
+    статус: Optional[constr(max_length=20)]
+    дата_платежа: Optional[date]
+
+class PaymentOut(PaymentBase):
+    id_платежа: int
+    дата_формирования: date
+
+    class Config:
+        from_attributes = True
+
+
+# Заявка
+
+class RequestBase(BaseModel):
+    id_договора: int
+    статус: constr(max_length=20)
+    текст_заявки: constr(max_length=500)
+
+class RequestCreate(RequestBase):
+    pass
+
+class RequestUpdate(BaseModel):
+    статус: Optional[constr(max_length=20)]
+    текст_заявки: Optional[constr(max_length=500)]
+
+class RequestOut(RequestBase):
+    id_заявки: int
+    дата_подачи: date
+
+    class Config:
+        from_attributes = True
+
+
+# Бронь
+
+class BookingBase(BaseModel):
+    id_арендатора: int
+    id_офиса: int
+    начало_брони: date
+    окончание_брони: date
+    статус: constr(max_length=20)
+
+class BookingCreate(BaseModel):
+    id_офиса: int
+    начало_брони: date
+    окончание_брони: date
+    статус: constr(max_length=20)
+
+class BookingUpdate(BaseModel):
+    начало_брони: Optional[date]
+    окончание_брони: Optional[date]
+    статус: Optional[constr(max_length=20)]
+
+class BookingOut(BookingBase):
+    id_брони: int
+    дата_бронирования: date
+
+    class Config:
+        from_attributes = True
+
+#Пользователь
+
+class UserCreate(BaseModel):
+    username: constr(min_length=4)
+    password: constr(min_length=6)
+    company_name: str
+    contact_person: str
+
+class UserLogin(BaseModel):
+    username: str
+    password: str
+
+class UserOut(BaseModel):
+    id: int
+    phone: str
+    role: str
+    id_арендатора: int | None
+
+    class Config:
+        from_attributes = True
+
+
+ #Токен
+class TokenData(BaseModel):
+    id: int
+    role: str
+    tenant_id: Optional[int] = None
+
+class TokenModel(BaseModel):
+    access_token: str
+    token_type: str
+
+class TokenDataForPersonal(BaseModel):
+    role: str
+
+from sqlalchemy import Column, ForeignKey, Integer, String, text, func, CheckConstraint, Date
+from .database import Base
+from sqlalchemy.orm import relationship
+import datetime
+
+class Tenant(Base):
+    __tablename__ = "арендатор"
+
+    id_арендатора = Column(Integer, primary_key=True, index=True)
+    название_компании = Column(String(100), nullable=False)
+    контактное_лицо = Column(String(100), nullable=False)
+    телефон = Column(String(20), nullable=False, unique=True)
+    дата_регистрации = Column(Date, nullable=False, server_default=func.current_date())
+
+
+class Office(Base):
+    __tablename__ = "офис"
+
+    id_офиса = Column(Integer, primary_key=True, index=True)
+    номер_офиса = Column(String(10), nullable=False)
+    этаж = Column(Integer, nullable=False)
+    площадь = Column(Integer, nullable=False)
+    стоимость = Column(Integer, nullable=False)
+    статус = Column(String(20), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("этаж >= 1", name="check_этаж"),
+        CheckConstraint("площадь > 0", name="check_площадь"),
+        CheckConstraint("стоимость > 0", name="check_стоимость"),
+        CheckConstraint("статус IN ('свободен', 'арендуется', 'в резерве', 'на обслуживании')", name="check_статус_офиса"),
+    )
+
+class Contract(Base):
+    __tablename__ = "договор"
+
+    id_договора = Column(Integer, primary_key=True, index=True)
+    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора", ondelete="CASCADE"), nullable=False)
+    id_офиса = Column(Integer, ForeignKey("офис.id_офиса", ondelete="CASCADE"), nullable=False)
+    дата_начала = Column(Date, nullable=False)
+    дата_окончания = Column(Date, nullable=False)
+    стоимость = Column(Integer, nullable=False)
+    дата_заключения = Column(Date, nullable=False, server_default=func.current_date())
+    статус = Column(String(20), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("стоимость > 0", name="check_стоимость_договора"),
+        CheckConstraint("дата_окончания >= дата_начала", name="check_даты_договора"),
+        CheckConstraint("статус IN ('активен', 'завершён', 'расторгнут')", name="check_статус_договора"),
+    )
+
+    # связи
+    арендатор = relationship("Tenant", backref="договора")
+    офис = relationship("Office", backref="договора")
+
+
+
+class Payment(Base):
+    __tablename__ = "платеж"
+
+    id_платежа = Column(Integer, primary_key=True, index=True)
+    id_договора = Column(Integer, ForeignKey("договор.id_договора", ondelete="CASCADE"), nullable=False)
+    дата_формирования = Column(Date, nullable=False, server_default=func.current_date())
+    срок_оплаты = Column(Date, nullable=False)
+    сумма = Column(Integer, nullable=False)
+    дата_платежа = Column(Date, nullable=True)
+    статус = Column(String(20), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("сумма > 0", name="check_сумма_платежа"),
+        CheckConstraint("статус IN ('не оплачен', 'оплачен', 'просрочен')", name="check_статус_платежа"),
+    )
+
+    договор = relationship("Contract", backref="платежи")
+
+
+class Request(Base):
+    __tablename__ = "заявка"
+
+    id_заявки = Column(Integer, primary_key=True, index=True)
+    id_договора = Column(Integer, ForeignKey("договор.id_договора", ondelete="CASCADE"), nullable=False)
+    дата_подачи = Column(Date, nullable=False, server_default=func.current_date())
+    статус = Column(String(20), nullable=False)
+    текст_заявки = Column(String(500), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("статус IN ('новая', 'в работе', 'выполнена', 'отклонена')", name="check_статус_заявки"),
+    )
+
+    договор = relationship("Contract", backref="заявки")\
+
+
+class Booking(Base):
+    __tablename__ = "бронь"
+
+    id_брони = Column(Integer, primary_key=True, index=True)
+    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора", ondelete="CASCADE"), nullable=False)
+    id_офиса = Column(Integer, ForeignKey("офис.id_офиса", ondelete="CASCADE"), nullable=False)
+    дата_бронирования = Column(Date, nullable=False, server_default=func.current_date())
+    начало_брони = Column(Date, nullable=False)
+    окончание_брони = Column(Date, nullable=False)
+    статус = Column(String(20), nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("окончание_брони >= начало_брони", name="check_даты_брони"),
+        CheckConstraint("статус IN ('активна', 'аннулирована', 'истекла')", name="check_статус_брони"),
+    )
+
+    арендатор = relationship("Tenant", backref="брони")
+    офис = relationship("Office", backref="брони")
+
+
+class User(Base):
+    __tablename__ = "пользователь"
+
+    id = Column(Integer, primary_key=True, index=True)
+    phone = Column(String(100), unique=True, nullable=False)  # логин/телефон
+    hashed_password = Column(String(255), nullable=False)
+    role = Column(String(20), nullable=False)  # 'admin' или 'tenant'
+    id_арендатора = Column(Integer, ForeignKey("арендатор.id_арендатора", ondelete="CASCADE"), nullable=True)
+
+    арендатор = relationship("Tenant", backref="user")
+
+    __table_args__ = (
+        CheckConstraint("role IN ('admin','tenant','staff')"),
+    )

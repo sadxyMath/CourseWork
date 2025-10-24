@@ -2,7 +2,7 @@ import React, { useState, useEffect, createContext, useContext } from 'react';
 import { AlertCircle, Building2, FileText, Calendar, CreditCard, Users, ClipboardList, LogOut, Menu, X, Plus, Edit2, Trash2, Eye } from 'lucide-react';
 
 // API Configuration
-const API_BASE_URL = 'http://localhost:8000';
+const API_BASE_URL = 'http://localhost:8001';
 
 // Auth Context
 const AuthContext = createContext(null);
@@ -225,11 +225,18 @@ const AuthProvider = ({ children }) => {
   const login = async (phone, password) => {
     const response = await api.login(phone, password);
     api.setToken(response.access_token);
+    
+    // Декодируем токен чтобы получить данные пользователя
+    const tokenParts = response.access_token.split('.');
+    const payload = JSON.parse(atob(tokenParts[1]));
+    
     const userData = {
-      id: response.user_id,
-      role: response.user_role,
+      id: payload.user_id,
+      role: payload.user_role,
+      tenant_id: payload.tenant_id,
       phone
     };
+    
     setUser(userData);
     localStorage.setItem('user', JSON.stringify(userData));
   };
@@ -237,8 +244,16 @@ const AuthProvider = ({ children }) => {
   const register = async (data) => {
     const response = await api.register(data);
     api.setToken(response.access_token);
-    setUser(response.user);
-    localStorage.setItem('user', JSON.stringify(response.user));
+    
+    const userData = {
+      id: response.user.id,
+      role: response.user.role,
+      tenant_id: response.user.tenant_id,
+      phone: response.user.phone
+    };
+    
+    setUser(userData);
+    localStorage.setItem('user', JSON.stringify(userData));
   };
 
   const logout = () => {
@@ -467,24 +482,36 @@ const OfficesTab = () => {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editingOffice, setEditingOffice] = useState(null);
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterFloor, setFilterFloor] = useState('');
   const [formData, setFormData] = useState({
-    адрес: '',
+    номер_офиса: '',
+    этаж: '',
     площадь: '',
-    количество_комнат: '',
-    стоимость_аренды: '',
+    стоимость: '',
     статус: 'свободен'
   });
 
   useEffect(() => {
     loadOffices();
-  }, []);
+  }, [filterStatus, filterFloor]);
 
   const loadOffices = async () => {
     try {
-      const data = await api.getOffices();
+      let url = '/offices/';
+      const params = new URLSearchParams();
+      if (filterStatus) params.append('status', filterStatus);
+      if (filterFloor) params.append('floor', filterFloor);
+      
+      if (params.toString()) {
+        url += '?' + params.toString();
+      }
+      
+      const data = await api.request(url);
       setOffices(data);
     } catch (error) {
       console.error(error);
+      setOffices([]);
     } finally {
       setLoading(false);
     }
@@ -500,7 +527,7 @@ const OfficesTab = () => {
       }
       setShowModal(false);
       setEditingOffice(null);
-      setFormData({ адрес: '', площадь: '', количество_комнат: '', стоимость_аренды: '', статус: 'свободен' });
+      setFormData({ номер_офиса: '', этаж: '', площадь: '', стоимость: '', статус: 'свободен' });
       loadOffices();
     } catch (error) {
       alert(error.message);
@@ -508,6 +535,7 @@ const OfficesTab = () => {
   };
 
   const handleDelete = async (id) => {
+    // eslint-disable-next-line no-restricted-globals
     if (!confirm('Удалить офис?')) return;
     try {
       await api.deleteOffice(id);
@@ -520,16 +548,14 @@ const OfficesTab = () => {
   const openEditModal = (office) => {
     setEditingOffice(office);
     setFormData({
-      адрес: office.адрес,
+      номер_офиса: office.номер_офиса,
+      этаж: office.этаж,
       площадь: office.площадь,
-      количество_комнат: office.количество_комнат,
-      стоимость_аренды: office.стоимость_аренды,
+      стоимость: office.стоимость,
       статус: office.статус
     });
     setShowModal(true);
   };
-
-  if (loading) return <div className="text-center py-8">Загрузка...</div>;
 
   return (
     <div>
@@ -539,7 +565,7 @@ const OfficesTab = () => {
           <button
             onClick={() => {
               setEditingOffice(null);
-              setFormData({ адрес: '', площадь: '', количество_комнат: '', стоимость_аренды: '', статус: 'свободен' });
+              setFormData({ номер_офиса: '', этаж: '', площадь: '', стоимость: '', статус: 'свободен' });
               setShowModal(true);
             }}
             className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
@@ -550,22 +576,68 @@ const OfficesTab = () => {
         )}
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
-        {offices.map((office) => (
+      {/* Фильтры */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+            >
+              <option value="">Все статусы</option>
+              <option value="свободен">Свободен</option>
+              <option value="арендуется">Арендуется</option>
+              <option value="в резерве">В резерве</option>
+              <option value="на обслуживании">На обслуживании</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Этаж</label>
+            <input
+              type="number"
+              value={filterFloor}
+              onChange={(e) => setFilterFloor(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              placeholder="Любой этаж"
+              min="1"
+            />
+          </div>
+          <div className="flex items-end">
+            <button
+              onClick={() => {
+                setFilterStatus('');
+                setFilterFloor('');
+              }}
+              className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+            >
+              Сбросить фильтры
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {loading ? (
+        <div className="text-center py-8">Загрузка...</div>
+      ) : offices.length === 0 ? (
+        <div className="text-center py-8 text-gray-500">Офисы не найдены</div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">{offices.map((office) => (
           <div key={office.id_офиса} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
             <div className="flex justify-between items-start mb-4">
-              <h3 className="font-semibold text-lg text-gray-800">{office.адрес}</h3>
+              <h3 className="font-semibold text-lg text-gray-800">Офис {office.номер_офиса || 'Без номера'}</h3>
               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                 office.статус === 'свободен' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
               }`}>
-                {office.статус}
+                {office.статус || 'Неизвестно'}
               </span>
             </div>
             <div className="space-y-2 text-sm text-gray-600">
-              <p>Площадь: {office.площадь} м²</p>
-              <p>Комнат: {office.количество_комнат}</p>
+              <p>Этаж: {office.этаж || 0}</p>
+              <p>Площадь: {office.площадь || 0} м²</p>
               <p className="font-semibold text-gray-800">
-                {office.стоимость_аренды.toLocaleString()} ₽/мес
+                {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
               </p>
             </div>
             {user?.role === 'admin' && (
@@ -589,6 +661,7 @@ const OfficesTab = () => {
           </div>
         ))}
       </div>
+      )}
 
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
@@ -598,12 +671,24 @@ const OfficesTab = () => {
             </h3>
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Адрес</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Номер офиса</label>
                 <input
                   type="text"
-                  value={formData.адрес}
-                  onChange={(e) => setFormData({ ...formData, адрес: e.target.value })}
+                  value={formData.номер_офиса}
+                  onChange={(e) => setFormData({ ...formData, номер_офиса: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  placeholder="101"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Этаж</label>
+                <input
+                  type="number"
+                  value={formData.этаж}
+                  onChange={(e) => setFormData({ ...formData, этаж: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  min="1"
                   required
                 />
               </div>
@@ -614,26 +699,18 @@ const OfficesTab = () => {
                   value={formData.площадь}
                   onChange={(e) => setFormData({ ...formData, площадь: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  min="1"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Количество комнат</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Стоимость (₽/мес)</label>
                 <input
                   type="number"
-                  value={formData.количество_комнат}
-                  onChange={(e) => setFormData({ ...formData, количество_комнат: e.target.value })}
+                  value={formData.стоимость}
+                  onChange={(e) => setFormData({ ...formData, стоимость: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Стоимость аренды (₽)</label>
-                <input
-                  type="number"
-                  value={formData.стоимость_аренды}
-                  onChange={(e) => setFormData({ ...formData, стоимость_аренды: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  min="1"
                   required
                 />
               </div>
@@ -684,7 +761,8 @@ const BookingsTab = () => {
   const [formData, setFormData] = useState({
     id_офиса: '',
     начало_брони: '',
-    окончание_брони: ''
+    окончание_брони: '',
+    статус: 'активна'
   });
 
   useEffect(() => {
@@ -693,14 +771,15 @@ const BookingsTab = () => {
 
   const loadData = async () => {
     try {
-      const [bookingsData, officesData] = await Promise.all([
-        api.getBookings(),
-        api.getOffices()
-      ]);
-      setBookings(bookingsData);
-      setOffices(officesData);
+      const bookingsData = await api.getBookings();
+      // Загружаем только свободные офисы для выбора
+      const allOffices = await api.request('/offices/?status=свободен');
+      setBookings(Array.isArray(bookingsData) ? bookingsData : []);
+      setOffices(Array.isArray(allOffices) ? allOffices : []);
     } catch (error) {
       console.error(error);
+      setBookings([]);
+      setOffices([]);
     } finally {
       setLoading(false);
     }
@@ -711,7 +790,7 @@ const BookingsTab = () => {
     try {
       await api.createBooking(formData);
       setShowModal(false);
-      setFormData({ id_офиса: '', начало_брони: '', окончание_брони: '' });
+      setFormData({ id_офиса: '', начало_брони: '', окончание_брони: '', статус: 'активна' });
       loadData();
     } catch (error) {
       alert(error.message);
@@ -719,6 +798,7 @@ const BookingsTab = () => {
   };
 
   const handleDelete = async (id) => {
+    // eslint-disable-next-line no-restricted-globals
     if (!confirm('Отменить бронь?')) return;
     try {
       await api.deleteBooking(id);
@@ -745,7 +825,21 @@ const BookingsTab = () => {
         )}
       </div>
 
-      <div className="bg-white rounded-lg shadow-md overflow-hidden">
+      {bookings.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <Calendar className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600 mb-4">У вас пока нет бронирований</p>
+          {(user?.role === 'admin' || user?.role === 'tenant') && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+            >
+              Забронировать офис
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-md overflow-hidden">{bookings.length > 0 && (
         <table className="w-full">
           <thead className="bg-gray-50 border-b">
             <tr>
@@ -759,7 +853,7 @@ const BookingsTab = () => {
             {bookings.map((booking) => (
               <tr key={booking.id_брони}>
                 <td className="px-6 py-4 text-sm text-gray-900">
-                  {offices.find(o => o.id_офиса === booking.id_офиса)?.адрес || 'N/A'}
+                  Офис {offices.find(o => o.id_офиса === booking.id_офиса)?.номер_офиса || 'N/A'}
                 </td>
                 <td className="px-6 py-4 text-sm text-gray-600">
                   {new Date(booking.начало_брони).toLocaleDateString('ru-RU')}
@@ -781,13 +875,24 @@ const BookingsTab = () => {
             ))}
           </tbody>
         </table>
-      </div>
+        )}</div>
 
-      {showModal && (
+      )}{showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">Забронировать офис</h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            {offices.length === 0 ? (
+              <div className="text-center py-4">
+                <p className="text-gray-600 mb-4">Нет доступных офисов для бронирования</p>
+                <button
+                  onClick={() => setShowModal(false)}
+                  className="px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
+                >
+                  Закрыть
+                </button>
+              </div>
+            ) : (
+                <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-1">Офис</label>
                 <select
@@ -797,9 +902,9 @@ const BookingsTab = () => {
                   required
                 >
                   <option value="">Выберите офис</option>
-                  {offices.filter(o => o.статус === 'свободен').map((office) => (
+                  {offices.map((office) => (
                     <option key={office.id_офиса} value={office.id_офиса}>
-                      {office.адрес} - {office.стоимость_аренды.toLocaleString()} ₽/мес
+                      Офис {office.номер_офиса} (Этаж {office.этаж}, {office.площадь}м²) - {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
                     </option>
                   ))}
                 </select>
@@ -840,6 +945,7 @@ const BookingsTab = () => {
                 </button>
               </div>
             </form>
+            )}
           </div>
         </div>
       )}
@@ -903,11 +1009,11 @@ const ContractsTab = () => {
               </div>
               <div>
                 <p className="text-gray-600">Стоимость:</p>
-                <p className="font-medium text-indigo-600">{contract.стоимость.toLocaleString()} ₽</p>
+                <p className="font-medium text-indigo-600">{contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽</p>
               </div>
               <div>
                 <p className="text-gray-600">Залог:</p>
-                <p className="font-medium">{contract.залог.toLocaleString()} ₽</p>
+                <p className="font-medium">{contract.залог ? contract.залог.toLocaleString() : '0'} ₽</p>
               </div>
             </div>
           </div>
@@ -926,9 +1032,10 @@ const PaymentsTab = () => {
   const [showModal, setShowModal] = useState(false);
   const [formData, setFormData] = useState({
     id_договора: '',
+    срок_оплаты: '',
     сумма: '',
-    дата_платежа: '',
-    статус: 'не оплачен'
+    статус: 'не оплачен',
+    дата_платежа: ''
   });
 
   useEffect(() => {
@@ -955,7 +1062,7 @@ const PaymentsTab = () => {
     try {
       await api.createPayment(formData);
       setShowModal(false);
-      setFormData({ id_договора: '', сумма: '', дата_платежа: '', статус: 'не оплачен' });
+      setFormData({ id_договора: '', срок_оплаты: '', сумма: '', статус: 'не оплачен', дата_платежа: '' });
       loadData();
     } catch (error) {
       alert(error.message);
@@ -1006,7 +1113,8 @@ const PaymentsTab = () => {
             <tr>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID Договора</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Сумма</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Срок оплаты</th>
+              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата платежа</th>
               <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
             </tr>
           </thead>
@@ -1015,10 +1123,13 @@ const PaymentsTab = () => {
               <tr key={payment.id_платежа}>
                 <td className="px-6 py-4 text-sm text-gray-900">№{payment.id_договора}</td>
                 <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                  {payment.сумма.toLocaleString()} ₽
+                  {payment.сумма ? payment.сумма.toLocaleString() : '0'} ₽
                 </td>
                 <td className="px-6 py-4 text-sm text-gray-600">
-                  {new Date(payment.дата_платежа).toLocaleDateString('ru-RU')}
+                  {new Date(payment.срок_оплаты).toLocaleDateString('ru-RU')}
+                </td>
+                <td className="px-6 py-4 text-sm text-gray-600">
+                  {payment.дата_платежа ? new Date(payment.дата_платежа).toLocaleDateString('ru-RU') : 'Не оплачен'}
                 </td>
                 <td className="px-6 py-4">
                   <span className={`px-3 py-1 rounded-full text-xs font-medium ${
@@ -1051,7 +1162,7 @@ const PaymentsTab = () => {
                   <option value="">Выберите договор</option>
                   {contracts.map((contract) => (
                     <option key={contract.id_договора} value={contract.id_договора}>
-                      Договор №{contract.id_договора} - {contract.стоимость.toLocaleString()} ₽
+                      Договор №{contract.id_договора} - {contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽
                     </option>
                   ))}
                 </select>
@@ -1063,17 +1174,27 @@ const PaymentsTab = () => {
                   value={formData.сумма}
                   onChange={(e) => setFormData({ ...formData, сумма: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  min="1"
                   required
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Дата платежа</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Срок оплаты</label>
+                <input
+                  type="date"
+                  value={formData.срок_оплаты}
+                  onChange={(e) => setFormData({ ...formData, срок_оплаты: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Дата платежа (необязательно)</label>
                 <input
                   type="date"
                   value={formData.дата_платежа}
                   onChange={(e) => setFormData({ ...formData, дата_платежа: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
                 />
               </div>
               <div>
@@ -1118,26 +1239,34 @@ const RequestsTab = () => {
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [filterStatus, setFilterStatus] = useState('');
   const [formData, setFormData] = useState({
     id_договора: '',
-    тип_заявки: '',
-    описание: ''
+    статус: 'новая',
+    текст_заявки: ''
   });
 
   useEffect(() => {
     loadData();
-  }, []);
+  }, [filterStatus]);
 
   const loadData = async () => {
     try {
+      let url = '/requests/';
+      if (filterStatus) {
+        url += `?status=${filterStatus}`;
+      }
+      
       const [requestsData, contractsData] = await Promise.all([
-        api.getRequests(),
+        api.request(url),
         api.getContracts()
       ]);
-      setRequests(requestsData);
-      setContracts(contractsData);
+      setRequests(Array.isArray(requestsData) ? requestsData : []);
+      setContracts(Array.isArray(contractsData) ? contractsData : []);
     } catch (error) {
       console.error(error);
+      setRequests([]);
+      setContracts([]);
     } finally {
       setLoading(false);
     }
@@ -1148,7 +1277,7 @@ const RequestsTab = () => {
     try {
       await api.createRequest(formData);
       setShowModal(false);
-      setFormData({ id_договора: '', тип_заявки: '', описание: '' });
+      setFormData({ id_договора: '', статус: 'новая', текст_заявки: '' });
       loadData();
     } catch (error) {
       alert(error.message);
@@ -1165,6 +1294,7 @@ const RequestsTab = () => {
   };
 
   const handleDelete = async (id) => {
+    // eslint-disable-next-line no-restricted-globals
     if (!confirm('Удалить заявку?')) return;
     try {
       await api.deleteRequest(id);
@@ -1196,20 +1326,21 @@ const RequestsTab = () => {
           <div key={request.id_заявки} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
             <div className="flex justify-between items-start mb-4">
               <div>
-                <h3 className="font-semibold text-lg text-gray-800">{request.тип_заявки}</h3>
+                <h3 className="font-semibold text-lg text-gray-800">Заявка №{request.id_заявки}</h3>
                 <p className="text-sm text-gray-600 mt-1">Договор №{request.id_договора}</p>
               </div>
               <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                 request.статус === 'новая' ? 'bg-blue-100 text-blue-700' : 
-                request.статус === 'в работе' ? 'bg-yellow-100 text-yellow-700' : 
-                'bg-green-100 text-green-700'
+                request.статус === 'в работе' ? 'bg-yellow-100 text-yellow-700' :
+                request.статус === 'выполнена' ? 'bg-green-100 text-green-700' :
+                'bg-red-100 text-red-700'
               }`}>
                 {request.статус}
               </span>
             </div>
-            <p className="text-gray-700 mb-4">{request.описание}</p>
+            <p className="text-gray-700 mb-4">{request.текст_заявки}</p>
             <p className="text-sm text-gray-500 mb-4">
-              Создана: {new Date(request.дата_создания).toLocaleDateString('ru-RU')}
+              Создана: {new Date(request.дата_подачи).toLocaleDateString('ru-RU')}
             </p>
             <div className="flex gap-2">
               {user?.role === 'staff' && request.статус !== 'выполнена' && (
@@ -1255,24 +1386,14 @@ const RequestsTab = () => {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Тип заявки</label>
-                <input
-                  type="text"
-                  value={formData.тип_заявки}
-                  onChange={(e) => setFormData({ ...formData, тип_заявки: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  placeholder="Например: Ремонт, Уборка"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Описание</label>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Текст заявки</label>
                 <textarea
-                  value={formData.описание}
-                  onChange={(e) => setFormData({ ...formData, описание: e.target.value })}
+                  value={formData.текст_заявки}
+                  onChange={(e) => setFormData({ ...formData, текст_заявки: e.target.value })}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                   rows="4"
                   placeholder="Опишите проблему подробно"
+                  maxLength="500"
                   required
                 />
               </div>
