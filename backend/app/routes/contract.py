@@ -5,7 +5,8 @@ from typing import List
 from backend.app import models, schemes
 from backend.app.database import get_db
 from backend.app.dependencies import require_role
-
+from datetime import timedelta
+from dateutil.relativedelta import relativedelta
 router = APIRouter(
     prefix="/contracts",
     tags=["Договоры"],
@@ -49,39 +50,81 @@ def get_contract(
 
 # =======================
 # POST /contracts — создание договора
-# (только admin)
 # =======================
 @router.post("/", response_model=schemes.ContractOut, status_code=status.HTTP_201_CREATED)
 def create_contract(
     contract: schemes.ContractCreate,
     db: Session = Depends(get_db),
-    current_user: schemes.TokenData = Depends(require_role(["admin"]))
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
 ):
-    # Проверка офиса
+    # --- Проверка офиса ---
     office = db.query(models.Office).filter(models.Office.id_офиса == contract.id_офиса).first()
     if not office:
         raise HTTPException(status_code=404, detail="Офис не найден")
+
     if office.статус != "свободен":
         raise HTTPException(status_code=400, detail="Офис уже недоступен для аренды")
 
-    # Проверка арендатора
-    tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == contract.id_арендатора).first()
-    if not tenant:
+    # --- Проверка арендатора ---
+    tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == current_user.tenant_id).first()
+    if not tenant and current_user.role != "admin":
         raise HTTPException(status_code=400, detail="Арендатор не найден")
 
-    # Проверка логики дат
+    # --- Проверка прав доступа ---
+    # Арендатор может создавать договор только для себя
+    if current_user.role == "tenant" and tenant.id_арендатора != current_user.tenant_id:
+        raise HTTPException(status_code=403, detail="Вы можете создавать договоры только для себя")
+
+    # --- Проверка дат ---
     if contract.дата_окончания < contract.дата_начала:
         raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
 
-    db_contract = models.Contract(**contract.dict())
-    db.add(db_contract)
+    # --- Создание договора ---
+    if current_user.role == "tenant":
+        data = contract.dict()
+        data["id_арендатора"] = current_user.tenant_id
+    else:
+        data = contract.dict()
 
-    # Меняем статус офиса
+   # --- Расчёт стоимости ---
+    duration_days = (contract.дата_окончания - contract.дата_начала).days + 1
+    monthly_price = office.стоимость
+    total_price = round((monthly_price / 30) * duration_days, 2)  # создаём total_price
+    data["стоимость"] = total_price
+
+    # --- Статус договора ---
+    data["статус"] = "активен"
+
+    db_contract = models.Contract(**data)
+    db.add(db_contract)
     office.статус = "арендуется"
 
     db.commit()
     db.refresh(db_contract)
+
+    # --- Создание помесячных платежей ---
+    months = max(1, (duration_days + 29) // 30)
+    monthly_payment_amount = round(total_price / months, 2)
+
+    for i in range(months):
+        due_date = contract.дата_начала + relativedelta(months=i)
+        db_payment = models.Payment(
+            id_договора=db_contract.id_договора,
+            дата_платежа=None,
+            срок_оплаты=due_date,
+            сумма=monthly_payment_amount,
+            статус="не оплачен"
+        )
+        db.add(db_payment)
+
+    db.commit()
+
     return db_contract
+
+
+
+
+
 
 
 # =======================
@@ -127,10 +170,13 @@ def delete_contract(
     if not db_contract:
         raise HTTPException(status_code=404, detail="Договор не найден")
 
+    # Меняем статус договора на "расторгнут"
+    db_contract.статус = "расторгнут"
+
     # Освобождаем офис, если связан
     if hasattr(db_contract, "офис") and db_contract.офис:
         db_contract.офис.статус = "свободен"
 
-    db.delete(db_contract)
     db.commit()
     return None
+

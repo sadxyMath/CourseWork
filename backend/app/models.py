@@ -27,7 +27,7 @@ class Office(Base):
         CheckConstraint("этаж >= 1", name="check_этаж"),
         CheckConstraint("площадь > 0", name="check_площадь"),
         CheckConstraint("стоимость > 0", name="check_стоимость"),
-        CheckConstraint("статус IN ('свободен', 'арендуется', 'в резерве', 'на обслуживании')", name="check_статус_офиса"),
+        CheckConstraint("статус IN ('свободен', 'арендуется', 'только для брони', 'на обслуживании')", name="check_статус_офиса"),
     )
 
 class Contract(Base):
@@ -103,6 +103,7 @@ class Booking(Base):
     __table_args__ = (
         CheckConstraint("окончание_брони >= начало_брони", name="check_даты_брони"),
         CheckConstraint("статус IN ('активна', 'аннулирована', 'истекла')", name="check_статус_брони"),
+        CheckConstraint("(окончание_брони - начало_брони) <= INTERVAL '1 month'", name="check_длительность_брони"),
     )
 
     арендатор = relationship("Tenant", backref="брони")

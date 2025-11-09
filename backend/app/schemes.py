@@ -62,8 +62,11 @@ class ContractBase(BaseModel):
     стоимость: conint(gt=0)
     статус: constr(max_length=20)
 
-class ContractCreate(ContractBase):
-    pass
+class ContractCreate(BaseModel):
+    id_офиса: int
+    id_арендатора: Optional[int] = None 
+    дата_начала: date
+    дата_окончания: date
 
 class ContractUpdate(BaseModel):
     дата_начала: Optional[date]

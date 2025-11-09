@@ -92,7 +92,7 @@ def update_request(
     request_id: int,
     updated: RequestUpdate,
     db: Session = Depends(get_db),
-    current_user=Depends(require_role(["admin", "tenant", "staff"]))
+    current_user=Depends(require_role(["admin", "staff"]))
 ):
     req = db.query(Request).filter(Request.id_заявки == request_id).first()
     if not req:

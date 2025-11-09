@@ -34,7 +34,7 @@ def get_all_bookings(
 def create_booking(
     booking: schemes.BookingCreate,
     db: Session = Depends(get_db),
-    current_user: schemes.TokenData = Depends(require_role(["tenant", "admin"]))
+    current_user: schemes.TokenData = Depends(require_role(["tenant"]))
 ):
     tenant_id = current_user.tenant_id if current_user.role == "tenant" else booking.id_арендатора
 
@@ -107,7 +107,7 @@ def update_booking(
 
 
 @router.delete("/{booking_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_booking(
+def cancel_booking(
     booking_id: int,
     db: Session = Depends(get_db),
     current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
@@ -116,9 +116,11 @@ def delete_booking(
     if not booking:
         raise HTTPException(status_code=404, detail="Бронь не найдена")
 
+    # Проверяем, что арендатор может отменить только свою бронь
     if current_user.role == "tenant" and booking.id_арендатора != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Можно удалять только свои брони")
+        raise HTTPException(status_code=403, detail="Можно аннулировать только свои брони")
 
-    db.delete(booking)
+    # Меняем статус вместо удаления
+    booking.статус = "аннулирована"
     db.commit()
     return None

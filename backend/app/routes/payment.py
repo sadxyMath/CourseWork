@@ -31,72 +31,23 @@ def get_payments(
     )
 
 
-# 🔹 Получить один платеж
-@router.get("/{payment_id}", response_model=PaymentOut)
-def get_payment(
+
+@router.put("/{payment_id}/pay", response_model=PaymentOut)
+def pay_payment(
     payment_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role(["admin", "tenant", "staff"]))
-):
-    payment = db.query(Payment).filter(Payment.id_платежа == payment_id).first()
-    if not payment:
-        raise HTTPException(status_code=404, detail="Платеж не найден")
-
-    # Проверяем доступ арендатора
-    if current_user.role == "tenant":
-        contract = db.query(Contract).filter(Contract.id_договора == payment.id_договора).first()
-        if not contract or contract.id_арендатора != current_user.tenant_id:
-            raise HTTPException(status_code=403, detail="Нет доступа к этому платежу")
-
-    return payment
-
-
-# 🔹 Создать платеж
-@router.post("/", response_model=PaymentOut, status_code=status.HTTP_201_CREATED)
-def create_payment(
-    payment: PaymentCreate,
-    db: Session = Depends(get_db),
-    current_user = Depends(require_role(["admin", "tenant"]))
-):
-    contract = db.query(Contract).filter(Contract.id_договора == payment.id_договора).first()
-    if not contract:
-        raise HTTPException(status_code=404, detail="Договор не найден")
-
-    if current_user.role == "tenant" and contract.id_арендатора != current_user.tenant_id:
-        raise HTTPException(status_code=403, detail="Можно создавать платеж только для своих договоров")
-
-    if payment.дата_платежа < contract.дата_начала:
-        raise HTTPException(status_code=400, detail="Дата платежа не может быть раньше даты начала договора")
-
-    if contract.статус == "расторгнут":
-        raise HTTPException(status_code=400, detail="Нельзя добавить платеж к расторгнутому договору")
-
-    db_payment = Payment(**payment.dict())
-    db.add(db_payment)
-    db.commit()
-    db.refresh(db_payment)
-    return db_payment
-
-
-# 🔹 Обновить платеж — только admin
-@router.put("/{payment_id}", response_model=PaymentOut)
-def update_payment(
-    payment_id: int,
-    payment: PaymentUpdate,
-    db: Session = Depends(get_db),
-    current_user = Depends(require_role(["admin"]))
+    current_user = Depends(require_role(["tenant"]))
 ):
     db_payment = db.query(Payment).filter(Payment.id_платежа == payment_id).first()
     if not db_payment:
         raise HTTPException(status_code=404, detail="Платеж не найден")
 
-    for key, value in payment.dict(exclude_unset=True).items():
-        setattr(db_payment, key, value)
+    db_payment.статус = "оплачен"
+    db_payment.дата_платежа = date.today()
 
     db.commit()
     db.refresh(db_payment)
     return db_payment
-
 
 # 🔹 Удалить платеж — только admin
 @router.delete("/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
