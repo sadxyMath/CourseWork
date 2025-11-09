@@ -39,10 +39,6 @@ class OfficeCreate(OfficeBase):
     pass
 
 class OfficeUpdate(BaseModel):
-    номер_офиса: Optional[constr(max_length=10)]
-    этаж: Optional[conint(ge=1)]
-    площадь: Optional[conint(gt=0)]
-    стоимость: Optional[conint(gt=0)]
     статус: Optional[constr(max_length=20)]
 
 class OfficeOut(OfficeBase):

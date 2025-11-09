@@ -70,11 +70,9 @@ def create_office(
     return db_office
 
 
-# --------------------------
-# UPDATE office (только admin)
-# --------------------------
+# UPDATE office — только изменение статуса
 @router.put("/{office_id}", response_model=OfficeOut)
-def update_office(
+def update_office_status(
     office_id: int,
     office: OfficeUpdate,
     db: Session = Depends(get_db),
@@ -84,12 +82,16 @@ def update_office(
     if not db_office:
         raise HTTPException(status_code=404, detail="Офис не найден")
 
-    for key, value in office.dict(exclude_unset=True).items():
-        setattr(db_office, key, value)
+    # Разрешаем изменять только статус
+    if office.статус is not None:
+        db_office.статус = office.статус
+    else:
+        raise HTTPException(status_code=400, detail="Можно обновлять только статус офиса")
 
     db.commit()
     db.refresh(db_office)
     return db_office
+
 
 
 # --------------------------

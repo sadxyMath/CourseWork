@@ -38,10 +38,16 @@ def create_booking(
 ):
     tenant_id = current_user.tenant_id if current_user.role == "tenant" else booking.id_арендатора
 
+    # Проверяем, что офис существует
     office = db.query(models.Office).filter(models.Office.id_офиса == booking.id_офиса).first()
     if not office:
         raise HTTPException(status_code=400, detail="Указанный офис не существует")
 
+    # ✅ Проверка: можно бронировать только офисы со статусом "для брони"
+    if office.статус.lower() != "для брони":
+        raise HTTPException(status_code=400, detail="Этот офис недоступен для бронирования")
+
+    # Проверяем, не бронировал ли этот арендатор уже этот офис
     existing = db.query(models.Booking).filter(
         models.Booking.id_офиса == booking.id_офиса,
         models.Booking.id_арендатора == tenant_id
@@ -49,9 +55,11 @@ def create_booking(
     if existing:
         raise HTTPException(status_code=400, detail="Вы уже забронировали этот офис")
 
+    # Проверяем корректность дат
     if booking.окончание_брони < booking.начало_брони:
         raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
 
+    # Проверяем пересечение по времени с другими бронями
     overlap = db.query(models.Booking).filter(
         models.Booking.id_офиса == booking.id_офиса,
         models.Booking.начало_брони < booking.окончание_брони,
@@ -60,6 +68,7 @@ def create_booking(
     if overlap:
         raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
 
+    # Создаем новую бронь
     new_booking = models.Booking(
         id_арендатора=tenant_id,
         **booking.dict()
@@ -67,7 +76,9 @@ def create_booking(
     db.add(new_booking)
     db.commit()
     db.refresh(new_booking)
+
     return new_booking
+
 
 
 @router.put("/{booking_id}", response_model=schemes.BookingOut)

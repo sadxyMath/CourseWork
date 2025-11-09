@@ -88,19 +88,9 @@ class ApiService {
   }
 
   // Offices
-  async getOffices() {
-    return this.request('/offices/');
-  }
-
-  async getOffice(id) {
-    return this.request(`/offices/${id}`);
-  }
-
-  async createOffice(data) {
-    return this.request('/offices/', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  async getOffices(params = {}) {
+    const queryString = new URLSearchParams(params).toString();
+    return this.request(`/offices/${queryString ? '?' + queryString : ''}`);
   }
 
   async updateOffice(id, data) {
@@ -108,10 +98,6 @@ class ApiService {
       method: 'PUT',
       body: JSON.stringify(data)
     });
-  }
-
-  async deleteOffice(id) {
-    return this.request(`/offices/${id}`, { method: 'DELETE' });
   }
 
   // Bookings
@@ -122,13 +108,6 @@ class ApiService {
   async createBooking(data) {
     return this.request('/bookings/', {
       method: 'POST',
-      body: JSON.stringify(data)
-    });
-  }
-
-  async updateBooking(id, data) {
-    return this.request(`/bookings/${id}`, {
-      method: 'PUT',
       body: JSON.stringify(data)
     });
   }
@@ -149,27 +128,13 @@ class ApiService {
     });
   }
 
-  async updateContract(id, data) {
-    return this.request(`/contracts/${id}`, {
-      method: 'PUT',
-      body: JSON.stringify(data)
-    });
-  }
-
-  async deleteContract(id) {
-    return this.request(`/contracts/${id}`, { method: 'DELETE' });
-  }
-
   // Payments
   async getPayments() {
     return this.request('/payments/');
   }
 
-  async createPayment(data) {
-    return this.request('/payments/', {
-      method: 'POST',
-      body: JSON.stringify(data)
-    });
+  async payPayment(id) {
+    return this.request(`/payments/${id}/pay`, { method: 'PUT' });
   }
 
   async checkOverduePayments() {
@@ -177,8 +142,9 @@ class ApiService {
   }
 
   // Requests
-  async getRequests() {
-    return this.request('/requests/');
+  async getRequests(params = {}) {
+    const queryString = new URLSearchParams(params).toString();
+    return this.request(`/requests/${queryString ? '?' + queryString : ''}`);
   }
 
   async createRequest(data) {
@@ -193,10 +159,6 @@ class ApiService {
       method: 'PUT',
       body: JSON.stringify(data)
     });
-  }
-
-  async deleteRequest(id) {
-    return this.request(`/requests/${id}`, { method: 'DELETE' });
   }
 
   // Tenants
@@ -226,7 +188,6 @@ const AuthProvider = ({ children }) => {
     const response = await api.login(phone, password);
     api.setToken(response.access_token);
     
-    // Декодируем токен чтобы получить данные пользователя
     const tokenParts = response.access_token.split('.');
     const payload = JSON.parse(atob(tokenParts[1]));
     
@@ -405,10 +366,19 @@ const Sidebar = ({ activeTab, setActiveTab, isMobile, isOpen, setIsOpen }) => {
     { id: 'contracts', label: 'Договоры', icon: FileText, roles: ['admin', 'tenant'] },
     { id: 'payments', label: 'Платежи', icon: CreditCard, roles: ['admin', 'tenant', 'staff'] },
     { id: 'requests', label: 'Заявки', icon: ClipboardList, roles: ['admin', 'tenant', 'staff'] },
-    { id: 'tenants', label: 'Арендаторы', icon: Users, roles: ['admin'] },
+    { id: 'tenants', label: 'Арендаторы', icon: Users, roles: ['admin', 'staff'] },
   ];
 
   const filteredItems = menuItems.filter(item => item.roles.includes(user?.role));
+
+  const getRoleName = (role) => {
+    switch(role) {
+      case 'admin': return 'Администратор';
+      case 'tenant': return 'Арендатор';
+      case 'staff': return 'Персонал';
+      default: return role;
+    }
+  };
 
   return (
     <>
@@ -438,7 +408,7 @@ const Sidebar = ({ activeTab, setActiveTab, isMobile, isOpen, setIsOpen }) => {
               </button>
             )}
           </div>
-          <p className="text-indigo-300 text-sm mt-2">{user?.role === 'admin' ? 'Администратор' : user?.role === 'tenant' ? 'Арендатор' : 'Персонал'}</p>
+          <p className="text-indigo-300 text-sm mt-2">{getRoleName(user?.role)}</p>
         </div>
 
         <nav className="flex-1 p-4 space-y-2">
@@ -480,17 +450,11 @@ const OfficesTab = () => {
   const { user } = useAuth();
   const [offices, setOffices] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [editingOffice, setEditingOffice] = useState(null);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [selectedOffice, setSelectedOffice] = useState(null);
+  const [newStatus, setNewStatus] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterFloor, setFilterFloor] = useState('');
-  const [formData, setFormData] = useState({
-    номер_офиса: '',
-    этаж: '',
-    площадь: '',
-    стоимость: '',
-    статус: 'свободен'
-  });
 
   useEffect(() => {
     loadOffices();
@@ -498,16 +462,11 @@ const OfficesTab = () => {
 
   const loadOffices = async () => {
     try {
-      let url = '/offices/';
-      const params = new URLSearchParams();
-      if (filterStatus) params.append('status', filterStatus);
-      if (filterFloor) params.append('floor', filterFloor);
+      const params = {};
+      if (filterStatus) params.status = filterStatus;
+      if (filterFloor) params.floor = filterFloor;
       
-      if (params.toString()) {
-        url += '?' + params.toString();
-      }
-      
-      const data = await api.request(url);
+      const data = await api.getOffices(params);
       setOffices(data);
     } catch (error) {
       console.error(error);
@@ -517,63 +476,29 @@ const OfficesTab = () => {
     }
   };
 
-  const handleSubmit = async (e) => {
-    e.preventDefault();
+  const handleStatusChange = async () => {
+    if (!selectedOffice || !newStatus) return;
     try {
-      if (editingOffice) {
-        await api.updateOffice(editingOffice.id_офиса, formData);
-      } else {
-        await api.createOffice(formData);
-      }
-      setShowModal(false);
-      setEditingOffice(null);
-      setFormData({ номер_офиса: '', этаж: '', площадь: '', стоимость: '', статус: 'свободен' });
+      await api.updateOffice(selectedOffice.id_офиса, { статус: newStatus });
+      setShowStatusModal(false);
+      setSelectedOffice(null);
+      setNewStatus('');
       loadOffices();
     } catch (error) {
       alert(error.message);
     }
   };
 
-  const handleDelete = async (id) => {
-    // eslint-disable-next-line no-restricted-globals
-    if (!confirm('Удалить офис?')) return;
-    try {
-      await api.deleteOffice(id);
-      loadOffices();
-    } catch (error) {
-      alert(error.message);
-    }
-  };
-
-  const openEditModal = (office) => {
-    setEditingOffice(office);
-    setFormData({
-      номер_офиса: office.номер_офиса,
-      этаж: office.этаж,
-      площадь: office.площадь,
-      стоимость: office.стоимость,
-      статус: office.статус
-    });
-    setShowModal(true);
+  const openStatusModal = (office) => {
+    setSelectedOffice(office);
+    setNewStatus(office.статус);
+    setShowStatusModal(true);
   };
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Офисы</h2>
-        {user?.role === 'admin' && (
-          <button
-            onClick={() => {
-              setEditingOffice(null);
-              setFormData({ номер_офиса: '', этаж: '', площадь: '', стоимость: '', статус: 'свободен' });
-              setShowModal(true);
-            }}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
-          >
-            <Plus className="w-5 h-5" />
-            Добавить офис
-          </button>
-        )}
       </div>
 
       {/* Фильтры */}
@@ -589,7 +514,7 @@ const OfficesTab = () => {
               <option value="">Все статусы</option>
               <option value="свободен">Свободен</option>
               <option value="арендуется">Арендуется</option>
-              <option value="в резерве">В резерве</option>
+              <option value="только для брони">Только для брони</option>
               <option value="на обслуживании">На обслуживании</option>
             </select>
           </div>
@@ -623,127 +548,83 @@ const OfficesTab = () => {
       ) : offices.length === 0 ? (
         <div className="text-center py-8 text-gray-500">Офисы не найдены</div>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">{offices.map((office) => (
-          <div key={office.id_офиса} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-            <div className="flex justify-between items-start mb-4">
-              <h3 className="font-semibold text-lg text-gray-800">Офис {office.номер_офиса || 'Без номера'}</h3>
-              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                office.статус === 'свободен' ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-700'
-              }`}>
-                {office.статус || 'Неизвестно'}
-              </span>
-            </div>
-            <div className="space-y-2 text-sm text-gray-600">
-              <p>Этаж: {office.этаж || 0}</p>
-              <p>Площадь: {office.площадь || 0} м²</p>
-              <p className="font-semibold text-gray-800">
-                {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
-              </p>
-            </div>
-            {user?.role === 'admin' && (
-              <div className="flex gap-2 mt-4">
-                <button
-                  onClick={() => openEditModal(office)}
-                  className="flex-1 flex items-center justify-center gap-2 bg-blue-50 text-blue-600 px-3 py-2 rounded-lg hover:bg-blue-100"
-                >
-                  <Edit2 className="w-4 h-4" />
-                  Изменить
-                </button>
-                <button
-                  onClick={() => handleDelete(office.id_офиса)}
-                  className="flex-1 flex items-center justify-center gap-2 bg-red-50 text-red-600 px-3 py-2 rounded-lg hover:bg-red-100"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Удалить
-                </button>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+          {offices.map((office) => (
+            <div key={office.id_офиса} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <div className="flex justify-between items-start mb-4">
+                <h3 className="font-semibold text-lg text-gray-800">Офис {office.номер_офиса || 'Без номера'}</h3>
+                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  office.статус === 'свободен' ? 'bg-green-100 text-green-700' : 
+                  office.статус === 'только для брони' ? 'bg-blue-100 text-blue-700' :
+                  office.статус === 'арендуется' ? 'bg-red-100 text-red-700' :
+                  'bg-gray-100 text-gray-700'
+                }`}>
+                  {office.статус || 'Неизвестно'}
+                </span>
               </div>
-            )}
-          </div>
-        ))}
-      </div>
+              <div className="space-y-2 text-sm text-gray-600">
+                <p>Этаж: {office.этаж || 0}</p>
+                <p>Площадь: {office.площадь || 0} м²</p>
+                <p className="font-semibold text-gray-800">
+                  {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
+                </p>
+              </div>
+              {user?.role === 'admin' && (
+                <div className="mt-4">
+                  <button
+                    onClick={() => openStatusModal(office)}
+                    className="w-full flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 px-3 py-2 rounded-lg hover:bg-indigo-100"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    Изменить статус
+                  </button>
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
       )}
 
-      {showModal && (
+      {/* Modal изменения статуса */}
+      {showStatusModal && selectedOffice && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">
-              {editingOffice ? 'Редактировать офис' : 'Новый офис'}
+              Изменить статус офиса {selectedOffice.номер_офиса}
             </h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Номер офиса</label>
-                <input
-                  type="text"
-                  value={formData.номер_офиса}
-                  onChange={(e) => setFormData({ ...formData, номер_офиса: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  placeholder="101"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Этаж</label>
-                <input
-                  type="number"
-                  value={formData.этаж}
-                  onChange={(e) => setFormData({ ...formData, этаж: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  min="1"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Площадь (м²)</label>
-                <input
-                  type="number"
-                  value={formData.площадь}
-                  onChange={(e) => setFormData({ ...formData, площадь: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  min="1"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Стоимость (₽/мес)</label>
-                <input
-                  type="number"
-                  value={formData.стоимость}
-                  onChange={(e) => setFormData({ ...formData, стоимость: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  min="1"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Статус</label>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Новый статус</label>
                 <select
-                  value={formData.статус}
-                  onChange={(e) => setFormData({ ...formData, статус: e.target.value })}
+                  value={newStatus}
+                  onChange={(e) => setNewStatus(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 >
                   <option value="свободен">Свободен</option>
                   <option value="арендуется">Арендуется</option>
+                  <option value="только для брони">Только для брони</option>
+                  <option value="на обслуживании">На обслуживании</option>
                 </select>
               </div>
               <div className="flex gap-2 pt-4">
                 <button
                   type="button"
                   onClick={() => {
-                    setShowModal(false);
-                    setEditingOffice(null);
+                    setShowStatusModal(false);
+                    setSelectedOffice(null);
                   }}
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
                 >
                   Отмена
                 </button>
                 <button
-                  type="submit"
+                  onClick={handleStatusChange}
                   className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
                 >
-                  {editingOffice ? 'Сохранить' : 'Создать'}
+                  Сохранить
                 </button>
               </div>
-            </form>
+            </div>
           </div>
         </div>
       )}
@@ -772,8 +653,11 @@ const BookingsTab = () => {
   const loadData = async () => {
     try {
       const bookingsData = await api.getBookings();
-      // Загружаем только свободные офисы для выбора
-      const allOffices = await api.request('/offices/?status=свободен');
+      // Для tenant загружаем только офисы "только для брони"
+      const statusFilter = user?.role === 'tenant' ? 'только для брони' : '';
+      const allOffices = statusFilter 
+        ? await api.getOffices({ status: statusFilter })
+        : await api.getOffices();
       setBookings(Array.isArray(bookingsData) ? bookingsData : []);
       setOffices(Array.isArray(allOffices) ? allOffices : []);
     } catch (error) {
@@ -798,8 +682,7 @@ const BookingsTab = () => {
   };
 
   const handleDelete = async (id) => {
-    // eslint-disable-next-line no-restricted-globals
-    if (!confirm('Отменить бронь?')) return;
+    if (!window.confirm('Отменить бронь?')) return;
     try {
       await api.deleteBooking(id);
       loadData();
@@ -814,7 +697,7 @@ const BookingsTab = () => {
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Брони</h2>
-        {(user?.role === 'admin' || user?.role === 'tenant') && (
+        {user?.role === 'tenant' && (
           <button
             onClick={() => setShowModal(true)}
             className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
@@ -829,7 +712,7 @@ const BookingsTab = () => {
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <Calendar className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600 mb-4">У вас пока нет бронирований</p>
-          {(user?.role === 'admin' || user?.role === 'tenant') && (
+          {user?.role === 'tenant' && (
             <button
               onClick={() => setShowModal(true)}
               className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
@@ -839,45 +722,57 @@ const BookingsTab = () => {
           )}
         </div>
       ) : (
-        <div className="bg-white rounded-lg shadow-md overflow-hidden">{bookings.length > 0 && (
-        <table className="w-full">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Офис</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Начало</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Окончание</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {bookings.map((booking) => (
-              <tr key={booking.id_брони}>
-                <td className="px-6 py-4 text-sm text-gray-900">
-                  Офис {offices.find(o => o.id_офиса === booking.id_офиса)?.номер_офиса || 'N/A'}
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-600">
-                  {new Date(booking.начало_брони).toLocaleDateString('ru-RU')}
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-600">
-                  {new Date(booking.окончание_брони).toLocaleDateString('ru-RU')}
-                </td>
-                <td className="px-6 py-4 text-sm">
-                  {(user?.role === 'admin' || user?.role === 'tenant') && (
-                    <button
-                      onClick={() => handleDelete(booking.id_брони)}
-                      className="text-red-600 hover:text-red-800"
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  )}
-                </td>
+        <div className="bg-white rounded-lg shadow-md overflow-hidden">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Офис</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Начало</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Окончание</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                {user?.role === 'tenant' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
+                )}
               </tr>
-            ))}
-          </tbody>
-        </table>
-        )}</div>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {bookings.map((booking) => (
+                <tr key={booking.id_брони}>
+                  <td className="px-6 py-4 text-sm text-gray-900">
+                    Офис {offices.find(o => o.id_офиса === booking.id_офиса)?.номер_офиса || booking.id_офиса}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">
+                    {new Date(booking.начало_брони).toLocaleDateString('ru-RU')}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">
+                    {new Date(booking.окончание_брони).toLocaleDateString('ru-RU')}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      booking.статус === 'активна' ? 'bg-green-100 text-green-700' : 
+                      'bg-gray-100 text-gray-700'
+                    }`}>
+                      {booking.статус}
+                    </span>
+                  </td>
+                  {user?.role === 'tenant' && (
+                    <td className="px-6 py-4 text-sm">
+                      <button
+                        onClick={() => handleDelete(booking.id_брони)}
+                        className="text-red-600 hover:text-red-800"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
 
-      )}{showModal && (
+      {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">Забронировать офис</h3>
@@ -892,59 +787,59 @@ const BookingsTab = () => {
                 </button>
               </div>
             ) : (
-                <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Офис</label>
-                <select
-                  value={formData.id_офиса}
-                  onChange={(e) => setFormData({ ...formData, id_офиса: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                >
-                  <option value="">Выберите офис</option>
-                  {offices.map((office) => (
-                    <option key={office.id_офиса} value={office.id_офиса}>
-                      Офис {office.номер_офиса} (Этаж {office.этаж}, {office.площадь}м²) - {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Дата начала</label>
-                <input
-                  type="date"
-                  value={formData.начало_брони}
-                  onChange={(e) => setFormData({ ...formData, начало_брони: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Дата окончания</label>
-                <input
-                  type="date"
-                  value={formData.окончание_брони}
-                  onChange={(e) => setFormData({ ...formData, окончание_брони: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-              </div>
-              <div className="flex gap-2 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  Отмена
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-                >
-                  Забронировать
-                </button>
-              </div>
-            </form>
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Офис</label>
+                  <select
+                    value={formData.id_офиса}
+                    onChange={(e) => setFormData({ ...formData, id_офиса: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  >
+                    <option value="">Выберите офис</option>
+                    {offices.map((office) => (
+                      <option key={office.id_офиса} value={office.id_офиса}>
+                        Офис {office.номер_офиса} (Этаж {office.этаж}, {office.площадь}м²) - {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Дата начала</label>
+                  <input
+                    type="date"
+                    value={formData.начало_брони}
+                    onChange={(e) => setFormData({ ...formData, начало_брони: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Дата окончания</label>
+                  <input
+                    type="date"
+                    value={formData.окончание_брони}
+                    onChange={(e) => setFormData({ ...formData, окончание_брони: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  />
+                </div>
+                <div className="flex gap-2 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  >
+                    Забронировать
+                  </button>
+                </div>
+              </form>
             )}
           </div>
         </div>
@@ -957,85 +852,13 @@ const BookingsTab = () => {
 const ContractsTab = () => {
   const { user } = useAuth();
   const [contracts, setContracts] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadContracts();
-  }, []);
-
-  const loadContracts = async () => {
-    try {
-      const data = await api.getContracts();
-      setContracts(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) return <div className="text-center py-8">Загрузка...</div>;
-
-  return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Договоры</h2>
-      </div>
-
-      <div className="grid gap-4">
-        {contracts.map((contract) => (
-          <div key={contract.id_договора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h3 className="font-semibold text-lg text-gray-800">Договор №{contract.id_договора}</h3>
-                <p className="text-sm text-gray-600 mt-1">ID офиса: {contract.id_офиса}</p>
-              </div>
-              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                contract.статус === 'активен' ? 'bg-green-100 text-green-700' : 
-                contract.статус === 'завершён' ? 'bg-gray-100 text-gray-700' : 
-                'bg-red-100 text-red-700'
-              }`}>
-                {contract.статус}
-              </span>
-            </div>
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <p className="text-gray-600">Дата начала:</p>
-                <p className="font-medium">{new Date(contract.дата_начала).toLocaleDateString('ru-RU')}</p>
-              </div>
-              <div>
-                <p className="text-gray-600">Дата окончания:</p>
-                <p className="font-medium">{new Date(contract.дата_окончания).toLocaleDateString('ru-RU')}</p>
-              </div>
-              <div>
-                <p className="text-gray-600">Стоимость:</p>
-                <p className="font-medium text-indigo-600">{contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽</p>
-              </div>
-              <div>
-                <p className="text-gray-600">Залог:</p>
-                <p className="font-medium">{contract.залог ? contract.залог.toLocaleString() : '0'} ₽</p>
-              </div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-};
-
-// Payments Tab
-const PaymentsTab = () => {
-  const { user } = useAuth();
-  const [payments, setPayments] = useState([]);
-  const [contracts, setContracts] = useState([]);
+  const [offices, setOffices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [formData, setFormData] = useState({
-    id_договора: '',
-    срок_оплаты: '',
-    сумма: '',
-    статус: 'не оплачен',
-    дата_платежа: ''
+    id_офиса: '',
+    дата_начала: '',
+    дата_окончания: ''
   });
 
   useEffect(() => {
@@ -1044,12 +867,12 @@ const PaymentsTab = () => {
 
   const loadData = async () => {
     try {
-      const [paymentsData, contractsData] = await Promise.all([
-        api.getPayments(),
-        api.getContracts()
+      const [contractsData, officesData] = await Promise.all([
+        api.getContracts(),
+        api.getOffices({ status: 'свободен' })
       ]);
-      setPayments(paymentsData);
       setContracts(contractsData);
+      setOffices(officesData);
     } catch (error) {
       console.error(error);
     } finally {
@@ -1060,19 +883,9 @@ const PaymentsTab = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await api.createPayment(formData);
+      await api.createContract(formData);
       setShowModal(false);
-      setFormData({ id_договора: '', срок_оплаты: '', сумма: '', статус: 'не оплачен', дата_платежа: '' });
-      loadData();
-    } catch (error) {
-      alert(error.message);
-    }
-  };
-
-  const checkOverdue = async () => {
-    try {
-      const result = await api.checkOverduePayments();
-      alert(result.detail);
+      setFormData({ id_офиса: '', дата_начала: '', дата_окончания: '' });
       loadData();
     } catch (error) {
       alert(error.message);
@@ -1084,148 +897,297 @@ const PaymentsTab = () => {
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Платежи</h2>
-        <div className="flex gap-2">
-          {(user?.role === 'admin' || user?.role === 'staff') && (
-            <button
-              onClick={checkOverdue}
-              className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700"
-            >
-              <AlertCircle className="w-5 h-5" />
-              Проверить просрочку
-            </button>
-          )}
-          {(user?.role === 'admin' || user?.role === 'tenant') && (
+        <h2 className="text-2xl font-bold text-gray-800">Договоры</h2>
+        {user?.role === 'tenant' && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+          >
+            <Plus className="w-5 h-5" />
+            Создать договор
+          </button>
+        )}
+      </div>
+
+      {contracts.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600 mb-4">У вас пока нет договоров</p>
+          {user?.role === 'tenant' && (
             <button
               onClick={() => setShowModal(true)}
-              className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
             >
-              <Plus className="w-5 h-5" />
-              Добавить платеж
+              Создать договор
             </button>
           )}
         </div>
-      </div>
-
-      <div className="bg-white rounded-lg shadow-md overflow-x-auto">
-        <table className="w-full">
-          <thead className="bg-gray-50 border-b">
-            <tr>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID Договора</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Сумма</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Срок оплаты</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата платежа</th>
-              <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-gray-200">
-            {payments.map((payment) => (
-              <tr key={payment.id_платежа}>
-                <td className="px-6 py-4 text-sm text-gray-900">№{payment.id_договора}</td>
-                <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                  {payment.сумма ? payment.сумма.toLocaleString() : '0'} ₽
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-600">
-                  {new Date(payment.срок_оплаты).toLocaleDateString('ru-RU')}
-                </td>
-                <td className="px-6 py-4 text-sm text-gray-600">
-                  {payment.дата_платежа ? new Date(payment.дата_платежа).toLocaleDateString('ru-RU') : 'Не оплачен'}
-                </td>
-                <td className="px-6 py-4">
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    payment.статус === 'оплачен' ? 'bg-green-100 text-green-700' : 
-                    payment.статус === 'просрочен' ? 'bg-red-100 text-red-700' : 
-                    'bg-yellow-100 text-yellow-700'
-                  }`}>
-                    {payment.статус}
-                  </span>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      ) : (
+        <div className="grid gap-4">
+          {contracts.map((contract) => (
+            <div key={contract.id_договора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="font-semibold text-lg text-gray-800">Договор №{contract.id_договора}</h3>
+                  <p className="text-sm text-gray-600 mt-1">ID офиса: {contract.id_офиса}</p>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  contract.статус === 'активен' ? 'bg-green-100 text-green-700' : 
+                  contract.статус === 'завершён' ? 'bg-gray-100 text-gray-700' : 
+                  'bg-red-100 text-red-700'
+                }`}>
+                  {contract.статус}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-gray-600">Дата начала:</p>
+                  <p className="font-medium">{new Date(contract.дата_начала).toLocaleDateString('ru-RU')}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Дата окончания:</p>
+                  <p className="font-medium">{new Date(contract.дата_окончания).toLocaleDateString('ru-RU')}</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Стоимость:</p>
+                  <p className="font-medium text-indigo-600">{contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽</p>
+                </div>
+                <div>
+                  <p className="text-gray-600">Дата заключения:</p>
+                  <p className="font-medium">{new Date(contract.дата_заключения).toLocaleDateString('ru-RU')}</p>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
 
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-xl font-bold mb-4">Новый платеж</h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Договор</label>
-                <select
-                  value={formData.id_договора}
-                  onChange={(e) => setFormData({ ...formData, id_договора: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                >
-                  <option value="">Выберите договор</option>
-                  {contracts.map((contract) => (
-                    <option key={contract.id_договора} value={contract.id_договора}>
-                      Договор №{contract.id_договора} - {contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Сумма (₽)</label>
-                <input
-                  type="number"
-                  value={formData.сумма}
-                  onChange={(e) => setFormData({ ...formData, сумма: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  min="1"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Срок оплаты</label>
-                <input
-                  type="date"
-                  value={formData.срок_оплаты}
-                  onChange={(e) => setFormData({ ...formData, срок_оплаты: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Дата платежа (необязательно)</label>
-                <input
-                  type="date"
-                  value={formData.дата_платежа}
-                  onChange={(e) => setFormData({ ...formData, дата_платежа: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Статус</label>
-                <select
-                  value={formData.статус}
-                  onChange={(e) => setFormData({ ...formData, статус: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                >
-                  <option value="не оплачен">Не оплачен</option>
-                  <option value="оплачен">Оплачен</option>
-                  <option value="просрочен">Просрочен</option>
-                </select>
-              </div>
-              <div className="flex gap-2 pt-4">
+            <h3 className="text-xl font-bold mb-4">Создать договор</h3>
+            {offices.length === 0 ? (
+              <div className="text-center py-4">
+                <p className="text-gray-600 mb-4">Нет доступных офисов для аренды</p>
                 <button
-                  type="button"
                   onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  className="px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
                 >
-                  Отмена
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-                >
-                  Создать
+                  Закрыть
                 </button>
               </div>
-            </form>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Офис</label>
+                  <select
+                    value={formData.id_офиса}
+                    onChange={(e) => setFormData({ ...formData, id_офиса: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  >
+                    <option value="">Выберите офис</option>
+                    {offices.map((office) => (
+                      <option key={office.id_офиса} value={office.id_офиса}>
+                        Офис {office.номер_офиса} (Этаж {office.этаж}, {office.площадь}м²) - {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Дата начала</label>
+                  <input
+                    type="date"
+                    value={formData.дата_начала}
+                    onChange={(e) => setFormData({ ...formData, дата_начала: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Дата окончания</label>
+                  <input
+                    type="date"
+                    value={formData.дата_окончания}
+                    onChange={(e) => setFormData({ ...formData, дата_окончания: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  />
+                </div>
+                <div className="flex gap-2 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  >
+                    Создать
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Payments Tab
+const PaymentsTab = () => {
+  const { user } = useAuth();
+  const [payments, setPayments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [filterStatus, setFilterStatus] = useState('');
+
+  useEffect(() => {
+    loadPayments();
+  }, []);
+
+  const loadPayments = async () => {
+    try {
+      const paymentsData = await api.getPayments();
+      setPayments(paymentsData);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePayment = async (id) => {
+    if (!window.confirm('Подтвердить оплату?')) return;
+    try {
+      await api.payPayment(id);
+      loadPayments();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const checkOverdue = async () => {
+    try {
+      const result = await api.checkOverduePayments();
+      alert(result.detail);
+      loadPayments();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const filteredPayments = filterStatus 
+    ? payments.filter(p => p.статус === filterStatus)
+    : payments;
+
+  if (loading) return <div className="text-center py-8">Загрузка...</div>;
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-gray-800">Платежи</h2>
+        {(user?.role === 'admin' || user?.role === 'staff') && (
+          <button
+            onClick={checkOverdue}
+            className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700"
+          >
+            <AlertCircle className="w-5 h-5" />
+            Проверить просрочку
+          </button>
+        )}
+      </div>
+
+      {/* Фильтр */}
+      {user?.role === 'tenant' && (
+        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              >
+                <option value="">Все статусы</option>
+                <option value="не оплачен">Не оплачен</option>
+                <option value="оплачен">Оплачен</option>
+                <option value="просрочен">Просрочен</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={() => setFilterStatus('')}
+                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+              >
+                Сбросить фильтр
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {filteredPayments.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <CreditCard className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600">Платежи не найдены</p>
+        </div>
+      ) : (
+        <div className="bg-white rounded-lg shadow-md overflow-x-auto">
+          <table className="w-full">
+            <thead className="bg-gray-50 border-b">
+              <tr>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID Договора</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Сумма</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Срок оплаты</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата платежа</th>
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                {user?.role === 'tenant' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
+                )}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200">
+              {filteredPayments.map((payment) => (
+                <tr key={payment.id_платежа}>
+                  <td className="px-6 py-4 text-sm text-gray-900">№{payment.id_договора}</td>
+                  <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                    {payment.сумма ? payment.сумма.toLocaleString() : '0'} ₽
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">
+                    {new Date(payment.срок_оплаты).toLocaleDateString('ru-RU')}
+                  </td>
+                  <td className="px-6 py-4 text-sm text-gray-600">
+                    {payment.дата_платежа ? new Date(payment.дата_платежа).toLocaleDateString('ru-RU') : '—'}
+                  </td>
+                  <td className="px-6 py-4">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                      payment.статус === 'оплачен' ? 'bg-green-100 text-green-700' : 
+                      payment.статус === 'просрочен' ? 'bg-red-100 text-red-700' : 
+                      'bg-yellow-100 text-yellow-700'
+                    }`}>
+                      {payment.статус}
+                    </span>
+                  </td>
+                  {user?.role === 'tenant' && (
+                    <td className="px-6 py-4">
+                      {payment.статус === 'не оплачен' && (
+                        <button
+                          onClick={() => handlePayment(payment.id_платежа)}
+                          className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 text-xs"
+                        >
+                          Оплатить
+                        </button>
+                      )}
+                    </td>
+                  )}
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
     </div>
@@ -1239,26 +1201,24 @@ const RequestsTab = () => {
   const [contracts, setContracts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState(null);
+  const [newStatus, setNewStatus] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [formData, setFormData] = useState({
     id_договора: '',
-    статус: 'новая',
     текст_заявки: ''
   });
 
   useEffect(() => {
     loadData();
-  }, [filterStatus]);
+  }, []);
 
   const loadData = async () => {
     try {
-      let url = '/requests/';
-      if (filterStatus) {
-        url += `?status=${filterStatus}`;
-      }
-      
+      const params = filterStatus ? { status: filterStatus } : {};
       const [requestsData, contractsData] = await Promise.all([
-        api.request(url),
+        api.getRequests(params),
         api.getContracts()
       ]);
       setRequests(Array.isArray(requestsData) ? requestsData : []);
@@ -1275,29 +1235,28 @@ const RequestsTab = () => {
   const handleSubmit = async (e) => {
     e.preventDefault();
     try {
-      await api.createRequest(formData);
+      await api.createRequest({ ...formData, статус: 'новая' });
       setShowModal(false);
-      setFormData({ id_договора: '', статус: 'новая', текст_заявки: '' });
+      setFormData({ id_договора: '', текст_заявки: '' });
       loadData();
     } catch (error) {
       alert(error.message);
     }
   };
 
-  const updateStatus = async (id, newStatus) => {
-    try {
-      await api.updateRequest(id, { статус: newStatus });
-      loadData();
-    } catch (error) {
-      alert(error.message);
-    }
+  const openStatusModal = (request) => {
+    setSelectedRequest(request);
+    setNewStatus(request.статус);
+    setShowStatusModal(true);
   };
 
-  const handleDelete = async (id) => {
-    // eslint-disable-next-line no-restricted-globals
-    if (!confirm('Удалить заявку?')) return;
+  const handleStatusChange = async () => {
+    if (!selectedRequest || !newStatus) return;
     try {
-      await api.deleteRequest(id);
+      await api.updateRequest(selectedRequest.id_заявки, { статус: newStatus });
+      setShowStatusModal(false);
+      setSelectedRequest(null);
+      setNewStatus('');
       loadData();
     } catch (error) {
       alert(error.message);
@@ -1310,7 +1269,7 @@ const RequestsTab = () => {
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Заявки</h2>
-        {(user?.role === 'admin' || user?.role === 'tenant') && (
+        {user?.role === 'tenant' && (
           <button
             onClick={() => setShowModal(true)}
             className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
@@ -1321,49 +1280,93 @@ const RequestsTab = () => {
         )}
       </div>
 
-      <div className="grid gap-4">
-        {requests.map((request) => (
-          <div key={request.id_заявки} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-            <div className="flex justify-between items-start mb-4">
-              <div>
-                <h3 className="font-semibold text-lg text-gray-800">Заявка №{request.id_заявки}</h3>
-                <p className="text-sm text-gray-600 mt-1">Договор №{request.id_договора}</p>
-              </div>
-              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                request.статус === 'новая' ? 'bg-blue-100 text-blue-700' : 
-                request.статус === 'в работе' ? 'bg-yellow-100 text-yellow-700' :
-                request.статус === 'выполнена' ? 'bg-green-100 text-green-700' :
-                'bg-red-100 text-red-700'
-              }`}>
-                {request.статус}
-              </span>
+      {/* Фильтр для админа */}
+      {user?.role === 'admin' && (
+        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+              <select
+                value={filterStatus}
+                onChange={(e) => {
+                  setFilterStatus(e.target.value);
+                  loadData();
+                }}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              >
+                <option value="">Все статусы</option>
+                <option value="новая">Новая</option>
+                <option value="в работе">В работе</option>
+                <option value="выполнена">Выполнена</option>
+                <option value="отклонена">Отклонена</option>
+              </select>
             </div>
-            <p className="text-gray-700 mb-4">{request.текст_заявки}</p>
-            <p className="text-sm text-gray-500 mb-4">
-              Создана: {new Date(request.дата_подачи).toLocaleDateString('ru-RU')}
-            </p>
-            <div className="flex gap-2">
-              {user?.role === 'staff' && request.статус !== 'выполнена' && (
-                <button
-                  onClick={() => updateStatus(request.id_заявки, request.статус === 'новая' ? 'в работе' : 'выполнена')}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 text-sm"
-                >
-                  {request.статус === 'новая' ? 'Взять в работу' : 'Завершить'}
-                </button>
-              )}
-              {(user?.role === 'admin' || user?.role === 'tenant') && (
-                <button
-                  onClick={() => handleDelete(request.id_заявки)}
-                  className="px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 text-sm"
-                >
-                  Удалить
-                </button>
-              )}
+            <div className="flex items-end">
+              <button
+                onClick={() => {
+                  setFilterStatus('');
+                  loadData();
+                }}
+                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+              >
+                Сбросить фильтр
+              </button>
             </div>
           </div>
-        ))}
-      </div>
+        </div>
+      )}
 
+      {requests.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <ClipboardList className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600 mb-4">Заявки не найдены</p>
+          {user?.role === 'tenant' && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+            >
+              Создать заявку
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {requests.map((request) => (
+            <div key={request.id_заявки} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="font-semibold text-lg text-gray-800">Заявка №{request.id_заявки}</h3>
+                  <p className="text-sm text-gray-600 mt-1">Договор №{request.id_договора}</p>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  request.статус === 'новая' ? 'bg-blue-100 text-blue-700' : 
+                  request.статус === 'в работе' ? 'bg-yellow-100 text-yellow-700' :
+                  request.статус === 'выполнена' ? 'bg-green-100 text-green-700' :
+                  'bg-red-100 text-red-700'
+                }`}>
+                  {request.статус}
+                </span>
+              </div>
+              <p className="text-gray-700 mb-4">{request.текст_заявки}</p>
+              <p className="text-sm text-gray-500 mb-4">
+                Создана: {new Date(request.дата_подачи).toLocaleDateString('ru-RU')}
+              </p>
+              <div className="flex gap-2">
+                {(user?.role === 'admin' || user?.role === 'staff') && (
+                  <button
+                    onClick={() => openStatusModal(request)}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
+                  >
+                    Изменить статус
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Modal создания заявки */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
@@ -1416,6 +1419,50 @@ const RequestsTab = () => {
           </div>
         </div>
       )}
+
+      {/* Modal изменения статуса */}
+      {showStatusModal && selectedRequest && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4">
+              Изменить статус заявки №{selectedRequest.id_заявки}
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Новый статус</label>
+                <select
+                  value={newStatus}
+                  onChange={(e) => setNewStatus(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="новая">Новая</option>
+                  <option value="в работе">В работе</option>
+                  <option value="выполнена">Выполнена</option>
+                  <option value="отклонена">Отклонена</option>
+                </select>
+              </div>
+              <div className="flex gap-2 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStatusModal(false);
+                    setSelectedRequest(null);
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={handleStatusChange}
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -1448,18 +1495,25 @@ const TenantsTab = () => {
         <h2 className="text-2xl font-bold text-gray-800">Арендаторы</h2>
       </div>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        {tenants.map((tenant) => (
-          <div key={tenant.id_арендатора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-            <h3 className="font-semibold text-lg text-gray-800 mb-3">{tenant.название_компании}</h3>
-            <div className="space-y-2 text-sm text-gray-600">
-              <p><span className="font-medium">Контактное лицо:</span> {tenant.контактное_лицо}</p>
-              <p><span className="font-medium">Телефон:</span> {tenant.телефон}</p>
-              {tenant.email && <p><span className="font-medium">Email:</span> {tenant.email}</p>}
+      {tenants.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600">Арендаторы не найдены</p>
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {tenants.map((tenant) => (
+            <div key={tenant.id_арендатора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <h3 className="font-semibold text-lg text-gray-800 mb-3">{tenant.название_компании}</h3>
+              <div className="space-y-2 text-sm text-gray-600">
+                <p><span className="font-medium">Контактное лицо:</span> {tenant.контактное_лицо}</p>
+                <p><span className="font-medium">Телефон:</span> {tenant.телефон}</p>
+                <p><span className="font-medium">Дата регистрации:</span> {new Date(tenant.дата_регистрации).toLocaleDateString('ru-RU')}</p>
+              </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 };

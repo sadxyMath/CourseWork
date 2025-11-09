@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
 from datetime import date
-
+from typing import Optional
 from backend.app.database import get_db
 from backend.app.models import Payment, Contract
 from backend.app.schemes import PaymentOut, PaymentCreate, PaymentUpdate
@@ -13,23 +13,30 @@ router = APIRouter(
     tags=["Платежи"]
 )
 
-# 🔹 Получить все платежи
+
+# 🔹 Получить все платежи с фильтрацией
 @router.get("/", response_model=List[PaymentOut])
 def get_payments(
+    status: Optional[str] = None,
+    contract_number: Optional[str] = None,
     db: Session = Depends(get_db),
     current_user = Depends(require_role(["admin", "tenant", "staff"]))
 ):
-    if current_user.role in ["admin", "staff"]:
-        return db.query(Payment).all()
+    query = db.query(Payment).join(Contract)
 
     # tenant видит только свои платежи
-    return (
-        db.query(Payment)
-        .join(Contract)
-        .filter(Contract.id_арендатора == current_user.tenant_id)
-        .all()
-    )
+    if current_user.role == "tenant":
+        query = query.filter(Contract.id_арендатора == current_user.tenant_id)
 
+    # фильтруем по статусу платежа
+    if status:
+        query = query.filter(Payment.статус == status)
+
+    # фильтруем по номеру договора
+    if contract_number:
+        query = query.filter(Contract.номер_договора == contract_number)
+
+    return query.all()
 
 
 @router.put("/{payment_id}/pay", response_model=PaymentOut)
