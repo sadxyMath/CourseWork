@@ -1,5 +1,5 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { AlertCircle, Building2, FileText, Calendar, CreditCard, Users, ClipboardList, LogOut, Menu, X, Plus, Edit2, Trash2, Eye } from 'lucide-react';
+import { AlertCircle, Building2, FileText, Calendar, CreditCard, Users, ClipboardList, LogOut, Menu, X, Plus, Edit2, Trash2, Eye, Filter } from 'lucide-react';
 
 // API Configuration
 const API_BASE_URL = 'http://localhost:8001';
@@ -129,8 +129,9 @@ class ApiService {
   }
 
   // Payments
-  async getPayments() {
-    return this.request('/payments/');
+  async getPayments(params = {}) {
+    const queryString = new URLSearchParams(params).toString();
+    return this.request(`/payments/${queryString ? '?' + queryString : ''}`);
   }
 
   async payPayment(id) {
@@ -162,8 +163,16 @@ class ApiService {
   }
 
   // Tenants
-  async getTenants() {
-    return this.request('/tenants/');
+  async getTenants(params = {}) {
+    const queryString = new URLSearchParams(params).toString();
+    return this.request(`/tenants/${queryString ? '?' + queryString : ''}`);
+  }
+
+  async createTenant(data) {
+    return this.request('/tenants/', {
+      method: 'POST',
+      body: JSON.stringify(data)
+    });
   }
 }
 
@@ -229,6 +238,553 @@ const AuthProvider = ({ children }) => {
     </AuthContext.Provider>
   );
 };
+
+// Requests Tab
+const RequestsTab = () => {
+  const { user } = useAuth();
+  const [requests, setRequests] = useState([]);
+  const [contracts, setContracts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [selectedRequest, setSelectedRequest] = useState(null);
+  const [newStatus, setNewStatus] = useState('');
+  const [filterStatus, setFilterStatus] = useState('');
+  const [formData, setFormData] = useState({
+    id_договора: '',
+    текст_заявки: ''
+  });
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      const params = filterStatus ? { status: filterStatus } : {};
+      const [requestsData, contractsData] = await Promise.all([
+        api.getRequests(params),
+        api.getContracts()
+      ]);
+      setRequests(Array.isArray(requestsData) ? requestsData : []);
+      setContracts(Array.isArray(contractsData) ? contractsData : []);
+    } catch (error) {
+      console.error(error);
+      setRequests([]);
+      setContracts([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api.createRequest({ ...formData, статус: 'новая' });
+      setShowModal(false);
+      setFormData({ id_договора: '', текст_заявки: '' });
+      loadData();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const openStatusModal = (request) => {
+    setSelectedRequest(request);
+    setNewStatus(request.статус);
+    setShowStatusModal(true);
+  };
+
+  const handleStatusChange = async () => {
+    if (!selectedRequest || !newStatus) return;
+    try {
+      await api.updateRequest(selectedRequest.id_заявки, { статус: newStatus });
+      setShowStatusModal(false);
+      setSelectedRequest(null);
+      setNewStatus('');
+      loadData();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const applyFilters = () => {
+    loadData();
+  };
+
+  if (loading) return <div className="text-center py-8">Загрузка...</div>;
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-gray-800">Заявки</h2>
+        {user?.role === 'tenant' && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+          >
+            <Plus className="w-5 h-5" />
+            Создать заявку
+          </button>
+        )}
+      </div>
+
+      {/* Фильтр */}
+      {(user?.role === 'admin' || user?.role === 'staff') && (
+        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              >
+                <option value="">Все статусы</option>
+                <option value="новая">Новая</option>
+                <option value="в работе">В работе</option>
+                <option value="выполнена">Выполнена</option>
+                <option value="отклонена">Отклонена</option>
+              </select>
+            </div>
+            <div className="flex items-end gap-2">
+              <button
+                onClick={applyFilters}
+                className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+              >
+                Применить
+              </button>
+              <button
+                onClick={() => {
+                  setFilterStatus('');
+                  loadData();
+                }}
+                className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+              >
+                Сбросить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {requests.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <ClipboardList className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600 mb-4">Заявки не найдены</p>
+          {user?.role === 'tenant' && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+            >
+              Создать заявку
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="grid gap-4">
+          {requests.map((request) => (
+            <div key={request.id_заявки} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <div className="flex justify-between items-start mb-4">
+                <div>
+                  <h3 className="font-semibold text-lg text-gray-800">Заявка №{request.id_заявки}</h3>
+                  <p className="text-sm text-gray-600 mt-1">Договор №{request.id_договора}</p>
+                </div>
+                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                  request.статус === 'новая' ? 'bg-blue-100 text-blue-700' : 
+                  request.статус === 'в работе' ? 'bg-yellow-100 text-yellow-700' :
+                  request.статус === 'выполнена' ? 'bg-green-100 text-green-700' :
+                  'bg-red-100 text-red-700'
+                }`}>
+                  {request.статус}
+                </span>
+              </div>
+              <p className="text-gray-700 mb-4">{request.текст_заявки}</p>
+              <p className="text-sm text-gray-500 mb-4">
+                Создана: {new Date(request.дата_подачи).toLocaleDateString('ru-RU')}
+              </p>
+              <div className="flex gap-2">
+                {(user?.role === 'admin' || user?.role === 'staff') && (
+                  <button
+                    onClick={() => openStatusModal(request)}
+                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
+                  >
+                    Изменить статус
+                  </button>
+                )}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Modal создания заявки */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4">Новая заявка</h3>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Договор</label>
+                <select
+                  value={formData.id_договора}
+                  onChange={(e) => setFormData({ ...formData, id_договора: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  required
+                >
+                  <option value="">Выберите договор</option>
+                  {contracts.map((contract) => (
+                    <option key={contract.id_договора} value={contract.id_договора}>
+                      Договор №{contract.id_договора} (Офис {contract.id_офиса})
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Текст заявки</label>
+                <textarea
+                  value={formData.текст_заявки}
+                  onChange={(e) => setFormData({ ...formData, текст_заявки: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  rows="4"
+                  placeholder="Опишите проблему подробно"
+                  maxLength="500"
+                  required
+                />
+              </div>
+              <div className="flex gap-2 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                >
+                  Создать
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Modal изменения статуса */}
+      {showStatusModal && selectedRequest && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4">
+              Изменить статус заявки №{selectedRequest.id_заявки}
+            </h3>
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Новый статус</label>
+                <select
+                  value={newStatus}
+                  onChange={(e) => setNewStatus(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="новая">Новая</option>
+                  <option value="в работе">В работе</option>
+                  <option value="выполнена">Выполнена</option>
+                  <option value="отклонена">Отклонена</option>
+                </select>
+              </div>
+              <div className="flex gap-2 pt-4">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowStatusModal(false);
+                    setSelectedRequest(null);
+                  }}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={handleStatusChange}
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Tenants Tab
+const TenantsTab = () => {
+  const [tenants, setTenants] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showModal, setShowModal] = useState(false);
+  const [filterTenantId, setFilterTenantId] = useState('');
+  const [formData, setFormData] = useState({
+    название_компании: '',
+    контактное_лицо: '',
+    телефон: ''
+  });
+
+  useEffect(() => {
+    loadTenants();
+  }, []);
+
+  const loadTenants = async () => {
+    try {
+      const params = filterTenantId ? { tenant_id: filterTenantId } : {};
+      const data = await api.getTenants(params);
+      setTenants(data);
+    } catch (error) {
+      console.error(error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    try {
+      await api.createTenant(formData);
+      setShowModal(false);
+      setFormData({ название_компании: '', контактное_лицо: '', телефон: '' });
+      loadTenants();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const applyFilters = () => {
+    loadTenants();
+  };
+
+  if (loading) return <div className="text-center py-8">Загрузка...</div>;
+
+  return (
+    <div>
+      <div className="flex justify-between items-center mb-6">
+        <h2 className="text-2xl font-bold text-gray-800">Арендаторы</h2>
+        <button
+          onClick={() => setShowModal(true)}
+          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+        >
+          <Plus className="w-5 h-5" />
+          Добавить арендатора
+        </button>
+      </div>
+
+      {/* Фильтр */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">ID Арендатора</label>
+            <input
+              type="number"
+              value={filterTenantId}
+              onChange={(e) => setFilterTenantId(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              placeholder="ID арендатора"
+            />
+          </div>
+          <div className="flex items-end gap-2">
+            <button
+              onClick={applyFilters}
+              className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            >
+              Применить
+            </button>
+            <button
+              onClick={() => {
+                setFilterTenantId('');
+                loadTenants();
+              }}
+              className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+            >
+              Сбросить
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {tenants.length === 0 ? (
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600 mb-4">Арендаторы не найдены</p>
+          <button
+            onClick={() => setShowModal(true)}
+            className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+          >
+            Добавить арендатора
+          </button>
+        </div>
+      ) : (
+        <div className="grid gap-4 md:grid-cols-2">
+          {tenants.map((tenant) => (
+            <div key={tenant.id_арендатора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+              <div className="flex justify-between items-start mb-3">
+                <h3 className="font-semibold text-lg text-gray-800">{tenant.название_компании}</h3>
+                <span className="px-3 py-1 bg-indigo-100 text-indigo-700 rounded-full text-xs font-medium">
+                  ID: {tenant.id_арендатора}
+                </span>
+              </div>
+              <div className="space-y-2 text-sm text-gray-600">
+                <p><span className="font-medium">Контактное лицо:</span> {tenant.контактное_лицо}</p>
+                <p><span className="font-medium">Телефон:</span> {tenant.телефон}</p>
+                <p><span className="font-medium">Дата регистрации:</span> {new Date(tenant.дата_регистрации).toLocaleDateString('ru-RU')}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Modal создания арендатора */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4">Новый арендатор</h3>
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Название компании</label>
+                <input
+                  type="text"
+                  value={formData.название_компании}
+                  onChange={(e) => setFormData({ ...formData, название_компании: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  placeholder="ООО Компания"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Контактное лицо</label>
+                <input
+                  type="text"
+                  value={formData.контактное_лицо}
+                  onChange={(e) => setFormData({ ...formData, контактное_лицо: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  placeholder="Иван Иванов"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Телефон</label>
+                <input
+                  type="tel"
+                  value={formData.телефон}
+                  onChange={(e) => setFormData({ ...formData, телефон: e.target.value })}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  placeholder="+7 (999) 123-45-67"
+                  required
+                />
+              </div>
+              <div className="flex gap-2 pt-4">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                >
+                  Отмена
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                >
+                  Создать
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// Main Dashboard
+const Dashboard = () => {
+  const [activeTab, setActiveTab] = useState('offices');
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+
+  useEffect(() => {
+    const handleResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const renderContent = () => {
+    switch (activeTab) {
+      case 'offices': return <OfficesTab />;
+      case 'bookings': return <BookingsTab />;
+      case 'contracts': return <ContractsTab />;
+      case 'payments': return <PaymentsTab />;
+      case 'requests': return <RequestsTab />;
+      case 'tenants': return <TenantsTab />;
+      default: return <OfficesTab />;
+    }
+  };
+
+  return (
+    <div className="flex h-screen bg-gray-50">
+      <Sidebar 
+        activeTab={activeTab} 
+        setActiveTab={setActiveTab}
+        isMobile={isMobile}
+        isOpen={isMobileMenuOpen}
+        setIsOpen={setIsMobileMenuOpen}
+      />
+      
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {isMobile && (
+          <header className="bg-white border-b border-gray-200 p-4">
+            <button
+              onClick={() => setIsMobileMenuOpen(true)}
+              className="text-gray-600 hover:text-gray-900"
+            >
+              <Menu className="w-6 h-6" />
+            </button>
+          </header>
+        )}
+        
+        <main className="flex-1 overflow-y-auto p-6">
+          <div className="max-w-7xl mx-auto">
+            {renderContent()}
+          </div>
+        </main>
+      </div>
+    </div>
+  );
+};
+
+// Main App Component
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+}
+
+function AppContent() {
+  const { user, loading } = useAuth();
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
+        <div className="text-center">
+          <Building2 className="w-16 h-16 text-indigo-600 mx-auto mb-4 animate-pulse" />
+          <p className="text-gray-600">Загрузка...</p>
+        </div>
+      </div>
+    );
+  }
+
+  return user ? <Dashboard /> : <LoginPage />;
+}
 
 // Login Page
 const LoginPage = () => {
@@ -458,7 +1014,7 @@ const OfficesTab = () => {
 
   useEffect(() => {
     loadOffices();
-  }, [filterStatus, filterFloor]);
+  }, []);
 
   const loadOffices = async () => {
     try {
@@ -495,6 +1051,10 @@ const OfficesTab = () => {
     setShowStatusModal(true);
   };
 
+  const applyFilters = () => {
+    loadOffices();
+  };
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -529,15 +1089,22 @@ const OfficesTab = () => {
               min="1"
             />
           </div>
-          <div className="flex items-end">
+          <div className="flex items-end gap-2">
+            <button
+              onClick={applyFilters}
+              className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            >
+              Применить
+            </button>
             <button
               onClick={() => {
                 setFilterStatus('');
                 setFilterFloor('');
+                loadOffices();
               }}
-              className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+              className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
             >
-              Сбросить фильтры
+              Сбросить
             </button>
           </div>
         </div>
@@ -639,6 +1206,7 @@ const BookingsTab = () => {
   const [offices, setOffices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [filterStatus, setFilterStatus] = useState('');
   const [formData, setFormData] = useState({
     id_офиса: '',
     начало_брони: '',
@@ -653,11 +1221,8 @@ const BookingsTab = () => {
   const loadData = async () => {
     try {
       const bookingsData = await api.getBookings();
-      // Для tenant загружаем только офисы "только для брони"
-      const statusFilter = user?.role === 'tenant' ? 'только для брони' : '';
-      const allOffices = statusFilter 
-        ? await api.getOffices({ status: statusFilter })
-        : await api.getOffices();
+      // Всегда загружаем офисы со статусом "только для брони"
+      const allOffices = await api.getOffices({ status: 'только для брони' });
       setBookings(Array.isArray(bookingsData) ? bookingsData : []);
       setOffices(Array.isArray(allOffices) ? allOffices : []);
     } catch (error) {
@@ -682,7 +1247,7 @@ const BookingsTab = () => {
   };
 
   const handleDelete = async (id) => {
-    if (!window.confirm('Отменить бронь?')) return;
+    if (!window.confirm('Аннулировать бронь?')) return;
     try {
       await api.deleteBooking(id);
       loadData();
@@ -690,6 +1255,10 @@ const BookingsTab = () => {
       alert(error.message);
     }
   };
+
+  const filteredBookings = filterStatus 
+    ? bookings.filter(b => b.статус === filterStatus)
+    : bookings;
 
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
 
@@ -708,10 +1277,41 @@ const BookingsTab = () => {
         )}
       </div>
 
-      {bookings.length === 0 ? (
+      {/* Фильтр для админа */}
+      {user?.role === 'admin' && (
+        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+              <select
+                value={filterStatus}
+                onChange={(e) => setFilterStatus(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              >
+                <option value="">Все статусы</option>
+                <option value="активна">Активна</option>
+                <option value="аннулирована">Аннулирована</option>
+                <option value="истекла">Истекла</option>
+              </select>
+            </div>
+            <div className="flex items-end">
+              <button
+                onClick={() => setFilterStatus('')}
+                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+              >
+                Сбросить фильтр
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {filteredBookings.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <Calendar className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600 mb-4">У вас пока нет бронирований</p>
+          <p className="text-gray-600 mb-4">
+            {bookings.length === 0 ? 'У вас пока нет бронирований' : 'Брони не найдены'}
+          </p>
           {user?.role === 'tenant' && (
             <button
               onClick={() => setShowModal(true)}
@@ -730,13 +1330,13 @@ const BookingsTab = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Начало</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Окончание</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                {user?.role === 'tenant' && (
+                {(user?.role === 'tenant' || user?.role === 'admin') && (
                   <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
                 )}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {bookings.map((booking) => (
+              {filteredBookings.map((booking) => (
                 <tr key={booking.id_брони}>
                   <td className="px-6 py-4 text-sm text-gray-900">
                     Офис {offices.find(o => o.id_офиса === booking.id_офиса)?.номер_офиса || booking.id_офиса}
@@ -750,19 +1350,23 @@ const BookingsTab = () => {
                   <td className="px-6 py-4">
                     <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                       booking.статус === 'активна' ? 'bg-green-100 text-green-700' : 
+                      booking.статус === 'аннулирована' ? 'bg-red-100 text-red-700' :
                       'bg-gray-100 text-gray-700'
                     }`}>
                       {booking.статус}
                     </span>
                   </td>
-                  {user?.role === 'tenant' && (
+                  {(user?.role === 'tenant' || user?.role === 'admin') && (
                     <td className="px-6 py-4 text-sm">
-                      <button
-                        onClick={() => handleDelete(booking.id_брони)}
-                        className="text-red-600 hover:text-red-800"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {booking.статус === 'активна' && (
+                        <button
+                          onClick={() => handleDelete(booking.id_брони)}
+                          className="text-red-600 hover:text-red-800 flex items-center gap-1"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                          Аннулировать
+                        </button>
+                      )}
                     </td>
                   )}
                 </tr>
@@ -778,7 +1382,7 @@ const BookingsTab = () => {
             <h3 className="text-xl font-bold mb-4">Забронировать офис</h3>
             {offices.length === 0 ? (
               <div className="text-center py-4">
-                <p className="text-gray-600 mb-4">Нет доступных офисов для бронирования</p>
+                <p className="text-gray-600 mb-4">Нет доступных офисов для бронирования. Офисы должны иметь статус "только для брони".</p>
                 <button
                   onClick={() => setShowModal(false)}
                   className="px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
@@ -855,6 +1459,9 @@ const ContractsTab = () => {
   const [offices, setOffices] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
+  const [filterStatus, setFilterStatus] = useState('');
+  const [filterTenantId, setFilterTenantId] = useState('');
+  const [filterContractId, setFilterContractId] = useState('');
   const [formData, setFormData] = useState({
     id_офиса: '',
     дата_начала: '',
@@ -892,13 +1499,20 @@ const ContractsTab = () => {
     }
   };
 
+  const filteredContracts = contracts.filter(contract => {
+    if (filterStatus && contract.статус !== filterStatus) return false;
+    if (filterTenantId && contract.id_арендатора !== parseInt(filterTenantId)) return false;
+    if (filterContractId && contract.id_договора !== parseInt(filterContractId)) return false;
+    return true;
+  });
+
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Договоры</h2>
-        {user?.role === 'tenant' && (
+        {(user?.role === 'tenant' || user?.role === 'admin') && (
           <button
             onClick={() => setShowModal(true)}
             className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
@@ -909,11 +1523,70 @@ const ContractsTab = () => {
         )}
       </div>
 
-      {contracts.length === 0 ? (
+      {/* Фильтры */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          {user?.role === 'admin' && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+                <select
+                  value={filterStatus}
+                  onChange={(e) => setFilterStatus(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                >
+                  <option value="">Все статусы</option>
+                  <option value="активен">Активен</option>
+                  <option value="завершён">Завершён</option>
+                  <option value="расторгнут">Расторгнут</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">ID Арендатора</label>
+                <input
+                  type="number"
+                  value={filterTenantId}
+                  onChange={(e) => setFilterTenantId(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  placeholder="ID арендатора"
+                />
+              </div>
+            </>
+          )}
+          {user?.role === 'tenant' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Номер договора</label>
+              <input
+                type="number"
+                value={filterContractId}
+                onChange={(e) => setFilterContractId(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                placeholder="Номер договора"
+              />
+            </div>
+          )}
+          <div className="flex items-end">
+            <button
+              onClick={() => {
+                setFilterStatus('');
+                setFilterTenantId('');
+                setFilterContractId('');
+              }}
+              className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+            >
+              Сбросить фильтры
+            </button>
+          </div>
+        </div>
+      </div>
+
+      {filteredContracts.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600 mb-4">У вас пока нет договоров</p>
-          {user?.role === 'tenant' && (
+          <p className="text-gray-600 mb-4">
+            {contracts.length === 0 ? 'У вас пока нет договоров' : 'Договоры не найдены'}
+          </p>
+          {(user?.role === 'tenant' || user?.role === 'admin') && (
             <button
               onClick={() => setShowModal(true)}
               className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
@@ -924,12 +1597,13 @@ const ContractsTab = () => {
         </div>
       ) : (
         <div className="grid gap-4">
-          {contracts.map((contract) => (
+          {filteredContracts.map((contract) => (
             <div key={contract.id_договора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-semibold text-lg text-gray-800">Договор №{contract.id_договора}</h3>
                   <p className="text-sm text-gray-600 mt-1">ID офиса: {contract.id_офиса}</p>
+                  <p className="text-sm text-gray-600">ID арендатора: {contract.id_арендатора}</p>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                   contract.статус === 'активен' ? 'bg-green-100 text-green-700' : 
@@ -1044,6 +1718,10 @@ const PaymentsTab = () => {
   const [payments, setPayments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterContractId, setFilterContractId] = useState('');
+  const [showStatusModal, setShowStatusModal] = useState(false);
+  const [selectedPayment, setSelectedPayment] = useState(null);
+  const [newStatus, setNewStatus] = useState('');
 
   useEffect(() => {
     loadPayments();
@@ -1051,7 +1729,11 @@ const PaymentsTab = () => {
 
   const loadPayments = async () => {
     try {
-      const paymentsData = await api.getPayments();
+      const params = {};
+      if (filterStatus) params.status = filterStatus;
+      if (filterContractId) params.contract_number = filterContractId;
+      
+      const paymentsData = await api.getPayments(params);
       setPayments(paymentsData);
     } catch (error) {
       console.error(error);
@@ -1080,9 +1762,31 @@ const PaymentsTab = () => {
     }
   };
 
-  const filteredPayments = filterStatus 
-    ? payments.filter(p => p.статус === filterStatus)
-    : payments;
+  const openStatusModal = (payment) => {
+    setSelectedPayment(payment);
+    setNewStatus(payment.статус);
+    setShowStatusModal(true);
+  };
+
+  const handleStatusChange = async () => {
+    if (!selectedPayment || !newStatus) return;
+    try {
+      // Используем существующий эндпоинт для изменения статуса на "оплачен"
+      if (newStatus === 'оплачен') {
+        await api.payPayment(selectedPayment.id_платежа);
+      }
+      setShowStatusModal(false);
+      setSelectedPayment(null);
+      setNewStatus('');
+      loadPayments();
+    } catch (error) {
+      alert(error.message);
+    }
+  };
+
+  const applyFilters = () => {
+    loadPayments();
+  };
 
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
 
@@ -1101,36 +1805,54 @@ const PaymentsTab = () => {
         )}
       </div>
 
-      {/* Фильтр */}
-      {user?.role === 'tenant' && (
-        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
-              <select
-                value={filterStatus}
-                onChange={(e) => setFilterStatus(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="">Все статусы</option>
-                <option value="не оплачен">Не оплачен</option>
-                <option value="оплачен">Оплачен</option>
-                <option value="просрочен">Просрочен</option>
-              </select>
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={() => setFilterStatus('')}
-                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-              >
-                Сбросить фильтр
-              </button>
-            </div>
+      {/* Фильтры */}
+      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+            >
+              <option value="">Все статусы</option>
+              <option value="не оплачен">Не оплачен</option>
+              <option value="оплачен">Оплачен</option>
+              <option value="просрочен">Просрочен</option>
+            </select>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">ID Договора</label>
+            <input
+              type="number"
+              value={filterContractId}
+              onChange={(e) => setFilterContractId(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              placeholder="ID договора"
+            />
+          </div>
+          <div className="flex items-end gap-2">
+            <button
+              onClick={applyFilters}
+              className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+            >
+              Применить
+            </button>
+            <button
+              onClick={() => {
+                setFilterStatus('');
+                setFilterContractId('');
+                loadPayments();
+              }}
+              className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+            >
+              Сбросить
+            </button>
           </div>
         </div>
-      )}
+      </div>
 
-      {filteredPayments.length === 0 ? (
+      {payments.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <CreditCard className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600">Платежи не найдены</p>
@@ -1145,13 +1867,11 @@ const PaymentsTab = () => {
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Срок оплаты</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата платежа</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                {user?.role === 'tenant' && (
-                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
-                )}
+                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
-              {filteredPayments.map((payment) => (
+              {payments.map((payment) => (
                 <tr key={payment.id_платежа}>
                   <td className="px-6 py-4 text-sm text-gray-900">№{payment.id_договора}</td>
                   <td className="px-6 py-4 text-sm font-medium text-gray-900">
@@ -1172,260 +1892,38 @@ const PaymentsTab = () => {
                       {payment.статус}
                     </span>
                   </td>
-                  {user?.role === 'tenant' && (
-                    <td className="px-6 py-4">
-                      {payment.статус === 'не оплачен' && (
-                        <button
-                          onClick={() => handlePayment(payment.id_платежа)}
-                          className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 text-xs"
-                        >
-                          Оплатить
-                        </button>
-                      )}
-                    </td>
-                  )}
+                  <td className="px-6 py-4 flex gap-2">
+                    {user?.role === 'tenant' && payment.статус === 'не оплачен' && (
+                      <button
+                        onClick={() => handlePayment(payment.id_платежа)}
+                        className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 text-xs"
+                      >
+                        Оплатить
+                      </button>
+                    )}
+                    {user?.role === 'admin' && (
+                      <button
+                        onClick={() => openStatusModal(payment)}
+                        className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-xs flex items-center gap-1"
+                      >
+                        <Edit2 className="w-3 h-3" />
+                        Статус
+                      </button>
+                    )}
+                  </td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-    </div>
-  );
-};
-
-// Requests Tab
-const RequestsTab = () => {
-  const { user } = useAuth();
-  const [requests, setRequests] = useState([]);
-  const [contracts, setContracts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [showModal, setShowModal] = useState(false);
-  const [showStatusModal, setShowStatusModal] = useState(false);
-  const [selectedRequest, setSelectedRequest] = useState(null);
-  const [newStatus, setNewStatus] = useState('');
-  const [filterStatus, setFilterStatus] = useState('');
-  const [formData, setFormData] = useState({
-    id_договора: '',
-    текст_заявки: ''
-  });
-
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
-    try {
-      const params = filterStatus ? { status: filterStatus } : {};
-      const [requestsData, contractsData] = await Promise.all([
-        api.getRequests(params),
-        api.getContracts()
-      ]);
-      setRequests(Array.isArray(requestsData) ? requestsData : []);
-      setContracts(Array.isArray(contractsData) ? contractsData : []);
-    } catch (error) {
-      console.error(error);
-      setRequests([]);
-      setContracts([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleSubmit = async (e) => {
-    e.preventDefault();
-    try {
-      await api.createRequest({ ...formData, статус: 'новая' });
-      setShowModal(false);
-      setFormData({ id_договора: '', текст_заявки: '' });
-      loadData();
-    } catch (error) {
-      alert(error.message);
-    }
-  };
-
-  const openStatusModal = (request) => {
-    setSelectedRequest(request);
-    setNewStatus(request.статус);
-    setShowStatusModal(true);
-  };
-
-  const handleStatusChange = async () => {
-    if (!selectedRequest || !newStatus) return;
-    try {
-      await api.updateRequest(selectedRequest.id_заявки, { статус: newStatus });
-      setShowStatusModal(false);
-      setSelectedRequest(null);
-      setNewStatus('');
-      loadData();
-    } catch (error) {
-      alert(error.message);
-    }
-  };
-
-  if (loading) return <div className="text-center py-8">Загрузка...</div>;
-
-  return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Заявки</h2>
-        {user?.role === 'tenant' && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
-          >
-            <Plus className="w-5 h-5" />
-            Создать заявку
-          </button>
-        )}
-      </div>
-
-      {/* Фильтр для админа */}
-      {user?.role === 'admin' && (
-        <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
-              <select
-                value={filterStatus}
-                onChange={(e) => {
-                  setFilterStatus(e.target.value);
-                  loadData();
-                }}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-              >
-                <option value="">Все статусы</option>
-                <option value="новая">Новая</option>
-                <option value="в работе">В работе</option>
-                <option value="выполнена">Выполнена</option>
-                <option value="отклонена">Отклонена</option>
-              </select>
-            </div>
-            <div className="flex items-end">
-              <button
-                onClick={() => {
-                  setFilterStatus('');
-                  loadData();
-                }}
-                className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
-              >
-                Сбросить фильтр
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {requests.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-md p-8 text-center">
-          <ClipboardList className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600 mb-4">Заявки не найдены</p>
-          {user?.role === 'tenant' && (
-            <button
-              onClick={() => setShowModal(true)}
-              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
-            >
-              Создать заявку
-            </button>
-          )}
-        </div>
-      ) : (
-        <div className="grid gap-4">
-          {requests.map((request) => (
-            <div key={request.id_заявки} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="font-semibold text-lg text-gray-800">Заявка №{request.id_заявки}</h3>
-                  <p className="text-sm text-gray-600 mt-1">Договор №{request.id_договора}</p>
-                </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  request.статус === 'новая' ? 'bg-blue-100 text-blue-700' : 
-                  request.статус === 'в работе' ? 'bg-yellow-100 text-yellow-700' :
-                  request.статус === 'выполнена' ? 'bg-green-100 text-green-700' :
-                  'bg-red-100 text-red-700'
-                }`}>
-                  {request.статус}
-                </span>
-              </div>
-              <p className="text-gray-700 mb-4">{request.текст_заявки}</p>
-              <p className="text-sm text-gray-500 mb-4">
-                Создана: {new Date(request.дата_подачи).toLocaleDateString('ru-RU')}
-              </p>
-              <div className="flex gap-2">
-                {(user?.role === 'admin' || user?.role === 'staff') && (
-                  <button
-                    onClick={() => openStatusModal(request)}
-                    className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
-                  >
-                    Изменить статус
-                  </button>
-                )}
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-
-      {/* Modal создания заявки */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
-            <h3 className="text-xl font-bold mb-4">Новая заявка</h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Договор</label>
-                <select
-                  value={formData.id_договора}
-                  onChange={(e) => setFormData({ ...formData, id_договора: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                >
-                  <option value="">Выберите договор</option>
-                  {contracts.map((contract) => (
-                    <option key={contract.id_договора} value={contract.id_договора}>
-                      Договор №{contract.id_договора}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Текст заявки</label>
-                <textarea
-                  value={formData.текст_заявки}
-                  onChange={(e) => setFormData({ ...formData, текст_заявки: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  rows="4"
-                  placeholder="Опишите проблему подробно"
-                  maxLength="500"
-                  required
-                />
-              </div>
-              <div className="flex gap-2 pt-4">
-                <button
-                  type="button"
-                  onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
-                >
-                  Отмена
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-                >
-                  Создать
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
 
       {/* Modal изменения статуса */}
-      {showStatusModal && selectedRequest && (
+      {showStatusModal && selectedPayment && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">
-              Изменить статус заявки №{selectedRequest.id_заявки}
+              Изменить статус платежа №{selectedPayment.id_платежа}
             </h3>
             <div className="space-y-4">
               <div>
@@ -1435,10 +1933,9 @@ const RequestsTab = () => {
                   onChange={(e) => setNewStatus(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 >
-                  <option value="новая">Новая</option>
-                  <option value="в работе">В работе</option>
-                  <option value="выполнена">Выполнена</option>
-                  <option value="отклонена">Отклонена</option>
+                  <option value="не оплачен">Не оплачен</option>
+                  <option value="оплачен">Оплачен</option>
+                  <option value="просрочен">Просрочен</option>
                 </select>
               </div>
               <div className="flex gap-2 pt-4">
@@ -1446,7 +1943,7 @@ const RequestsTab = () => {
                   type="button"
                   onClick={() => {
                     setShowStatusModal(false);
-                    setSelectedRequest(null);
+                    setSelectedPayment(null);
                   }}
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
                 >
@@ -1466,136 +1963,3 @@ const RequestsTab = () => {
     </div>
   );
 };
-
-// Tenants Tab
-const TenantsTab = () => {
-  const [tenants, setTenants] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadTenants();
-  }, []);
-
-  const loadTenants = async () => {
-    try {
-      const data = await api.getTenants();
-      setTenants(data);
-    } catch (error) {
-      console.error(error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) return <div className="text-center py-8">Загрузка...</div>;
-
-  return (
-    <div>
-      <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Арендаторы</h2>
-      </div>
-
-      {tenants.length === 0 ? (
-        <div className="bg-white rounded-lg shadow-md p-8 text-center">
-          <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600">Арендаторы не найдены</p>
-        </div>
-      ) : (
-        <div className="grid gap-4 md:grid-cols-2">
-          {tenants.map((tenant) => (
-            <div key={tenant.id_арендатора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-              <h3 className="font-semibold text-lg text-gray-800 mb-3">{tenant.название_компании}</h3>
-              <div className="space-y-2 text-sm text-gray-600">
-                <p><span className="font-medium">Контактное лицо:</span> {tenant.контактное_лицо}</p>
-                <p><span className="font-medium">Телефон:</span> {tenant.телефон}</p>
-                <p><span className="font-medium">Дата регистрации:</span> {new Date(tenant.дата_регистрации).toLocaleDateString('ru-RU')}</p>
-              </div>
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-};
-
-// Main Dashboard
-const Dashboard = () => {
-  const [activeTab, setActiveTab] = useState('offices');
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
-
-  const renderContent = () => {
-    switch (activeTab) {
-      case 'offices': return <OfficesTab />;
-      case 'bookings': return <BookingsTab />;
-      case 'contracts': return <ContractsTab />;
-      case 'payments': return <PaymentsTab />;
-      case 'requests': return <RequestsTab />;
-      case 'tenants': return <TenantsTab />;
-      default: return <OfficesTab />;
-    }
-  };
-
-  return (
-    <div className="flex h-screen bg-gray-50">
-      <Sidebar 
-        activeTab={activeTab} 
-        setActiveTab={setActiveTab}
-        isMobile={isMobile}
-        isOpen={isMobileMenuOpen}
-        setIsOpen={setIsMobileMenuOpen}
-      />
-      
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {isMobile && (
-          <header className="bg-white border-b border-gray-200 p-4">
-            <button
-              onClick={() => setIsMobileMenuOpen(true)}
-              className="text-gray-600 hover:text-gray-900"
-            >
-              <Menu className="w-6 h-6" />
-            </button>
-          </header>
-        )}
-        
-        <main className="flex-1 overflow-y-auto p-6">
-          <div className="max-w-7xl mx-auto">
-            {renderContent()}
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-};
-
-// Main App Component
-export default function App() {
-  return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
-  );
-}
-
-function AppContent() {
-  const { user, loading } = useAuth();
-
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <Building2 className="w-16 h-16 text-indigo-600 mx-auto mb-4 animate-pulse" />
-          <p className="text-gray-600">Загрузка...</p>
-        </div>
-      </div>
-    );
-  }
-
-  return user ? <Dashboard /> : <LoginPage />;
-}
