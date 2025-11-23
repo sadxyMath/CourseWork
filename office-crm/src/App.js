@@ -1,5 +1,5 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { AlertCircle, Building2, FileText, Calendar, CreditCard, Users, ClipboardList, LogOut, Menu, X, Plus, Edit2, Trash2, Eye, Filter } from 'lucide-react';
+import { AlertCircle, Building2, FileText, Calendar, CreditCard, Users, ClipboardList, LogOut, Menu, X, Plus, Edit2, Trash2, Eye, Filter, RefreshCw,AlertTriangle } from 'lucide-react';
 
 // API Configuration
 const API_BASE_URL = 'http://localhost:8001';
@@ -116,7 +116,7 @@ class ApiService {
     return this.request(`/bookings/${id}`, { method: 'DELETE' });
   }
 
-  // Contracts
+   // Contracts
   async getContracts() {
     return this.request('/contracts/');
   }
@@ -127,6 +127,39 @@ class ApiService {
       body: JSON.stringify(data)
     });
   }
+
+  // ДОБАВЛЯЕМ НОВЫЕ МЕТОДЫ ДЛЯ РАБОТЫ С ИСТЕКШИМИ ДОГОВОРАМИ:
+
+  // Проверка и завершение истекших договоров
+  async checkExpiredContracts() {
+    return this.request('/contracts/check-expired', {
+      method: 'POST'
+    });
+  }
+
+  // Получение договоров, которые скоро истекут
+  async getExpiringContracts(days = 7) {
+    return this.request(`/contracts/expiring-soon?days=${days}`);
+  }
+
+  // Дополнительные методы для договоров (если нужны)
+  async getContract(id) {
+    return this.request(`/contracts/${id}`);
+  }
+
+  async updateContract(id, data) {
+    return this.request(`/contracts/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data)
+    });
+  }
+
+  async deleteContract(id) {
+    return this.request(`/contracts/${id}`, { method: 'DELETE' });
+  }
+
+    
+  
 
   // Payments
   async getPayments(params = {}) {
@@ -1470,11 +1503,19 @@ const ContractsTab = () => {
   const [offices, setOffices] = useState([]);
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [modalLoading, setModalLoading] = useState(false); // Отдельный loading для модалки
+  const [modalLoading, setModalLoading] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [showDetailsModal, setShowDetailsModal] = useState(false);
+  const [selectedContract, setSelectedContract] = useState(null);
   const [filterStatus, setFilterStatus] = useState('');
   const [filterTenantId, setFilterTenantId] = useState('');
   const [filterContractId, setFilterContractId] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortBy, setSortBy] = useState('id_договора');
+  const [sortOrder, setSortOrder] = useState('desc');
+  const [checkingExpired, setCheckingExpired] = useState(false);
+  const [expiringContracts, setExpiringContracts] = useState([]);
+  const [terminatingContract, setTerminatingContract] = useState(null);
   const [formData, setFormData] = useState({
     id_офиса: '',
     дата_начала: '',
@@ -1484,9 +1525,9 @@ const ContractsTab = () => {
 
   useEffect(() => {
     loadData();
+    loadExpiringContracts();
   }, []);
 
-  // Загружаем только договоры при открытии таба
   const loadData = async () => {
     try {
       const contractsData = await api.getContracts();
@@ -1499,16 +1540,25 @@ const ContractsTab = () => {
     }
   };
 
-  // Загружаем офисы и арендаторов только при открытии модалки
+  const loadExpiringContracts = async () => {
+    if (user?.role !== 'admin' && user?.role !== 'staff') return;
+    
+    try {
+      const response = await api.getExpiringContracts(7);
+      setExpiringContracts(response.expiring_contracts || []);
+    } catch (error) {
+      console.error('Ошибка загрузки истекающих договоров:', error);
+      setExpiringContracts([]);
+    }
+  };
+
   const loadModalData = async () => {
     setModalLoading(true);
     try {
       const [officesData, tenantsData] = await Promise.all([
-        // Загружаем офисы только если пользователь может создавать договоры
         (user?.role === 'tenant' || user?.role === 'admin') 
           ? api.getOffices({ status: 'свободен' })
           : Promise.resolve([]),
-        // Загружаем арендаторов только для админа
         user?.role === 'admin' ? api.getTenants() : Promise.resolve([])
       ]);
       
@@ -1523,7 +1573,6 @@ const ContractsTab = () => {
     }
   };
 
-  // Открываем модалку и загружаем данные для нее
   const handleOpenModal = async () => {
     await loadModalData();
     setShowModal(true);
@@ -1540,39 +1589,217 @@ const ContractsTab = () => {
         дата_окончания: '',
         id_арендатора: user?.role === 'tenant' ? user.id : '' 
       });
-      loadData(); // Перезагружаем список договоров
+      loadData();
+      loadExpiringContracts();
     } catch (error) {
       alert(error.message);
     }
   };
 
-  const filteredContracts = contracts.filter(contract => {
-    if (filterStatus && contract.статус !== filterStatus) return false;
-    if (filterTenantId && contract.id_арендатора !== parseInt(filterTenantId)) return false;
-    if (filterContractId && contract.id_договора !== parseInt(filterContractId)) return false;
-    return true;
-  });
+  const handleViewDetails = (contract) => {
+    setSelectedContract(contract);
+    setShowDetailsModal(true);
+  };
+
+  // Расторжение договора
+  const handleTerminateContract = async (contractId) => {
+    if (!window.confirm('Вы уверены, что хотите расторгнуть этот договор? Офис будет освобожден.')) {
+      return;
+    }
+
+    setTerminatingContract(contractId);
+    try {
+      await api.deleteContract(contractId);
+      alert('Договор успешно расторгнут');
+      loadData();
+      loadExpiringContracts();
+    } catch (error) {
+      alert('Ошибка при расторжении договора: ' + error.message);
+    } finally {
+      setTerminatingContract(null);
+    }
+  };
+
+  const calculateDaysLeft = (endDate) => {
+    const today = new Date();
+    const end = new Date(endDate);
+    const diffTime = end - today;
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
+
+  const getStatusBadge = (contract) => {
+    const daysLeft = calculateDaysLeft(contract.дата_окончания);
+    
+    if (contract.статус === 'расторгнут') {
+      return { text: 'Расторгнут', class: 'bg-red-100 text-red-700' };
+    }
+    if (contract.статус === 'завершён') {
+      return { text: 'Завершён', class: 'bg-gray-100 text-gray-700' };
+    }
+    if (daysLeft < 0) {
+      return { text: 'Завершён', class: 'bg-red-100 text-red-700' };
+    }
+    if (daysLeft <= 30) {
+      return { text: `Заканчивается (${daysLeft} д.)`, class: 'bg-orange-100 text-orange-700' };
+    }
+    return { text: 'Активен', class: 'bg-green-100 text-green-700' };
+  };
+
+  // Проверка и завершение истекших договоров
+  const handleCheckExpiredContracts = async () => {
+    setCheckingExpired(true);
+    try {
+      const result = await api.checkExpiredContracts();
+      alert(result.message);
+      loadData();
+      loadExpiringContracts();
+    } catch (error) {
+      alert('Ошибка при проверке договоров: ' + error.message);
+    } finally {
+      setCheckingExpired(false);
+    }
+  };
+
+  // Фильтрация и сортировка
+  const filteredAndSortedContracts = contracts
+    .filter(contract => {
+      if (filterStatus && contract.статус !== filterStatus) return false;
+      if (filterTenantId && contract.id_арендатора !== parseInt(filterTenantId)) return false;
+      if (filterContractId && contract.id_договора !== parseInt(filterContractId)) return false;
+      if (searchTerm) {
+        const searchLower = searchTerm.toLowerCase();
+        return (
+          contract.id_договора.toString().includes(searchLower) ||
+          contract.id_офиса.toString().includes(searchLower) ||
+          contract.id_арендатора.toString().includes(searchLower)
+        );
+      }
+      return true;
+    })
+    .sort((a, b) => {
+      let aValue = a[sortBy];
+      let bValue = b[sortBy];
+      
+      if (sortBy.includes('дата')) {
+        aValue = new Date(aValue);
+        bValue = new Date(bValue);
+      }
+      
+      if (sortOrder === 'asc') {
+        return aValue > bValue ? 1 : -1;
+      } else {
+        return aValue < bValue ? 1 : -1;
+      }
+    });
+
+  const handleSort = (field) => {
+    if (sortBy === field) {
+      setSortOrder(sortOrder === 'asc' ? 'desc' : 'asc');
+    } else {
+      setSortBy(field);
+      setSortOrder('desc');
+    }
+  };
+
+  const getSortIcon = (field) => {
+    if (sortBy !== field) return '↕️';
+    return sortOrder === 'asc' ? '↑' : '↓';
+  };
 
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
-        <h2 className="text-2xl font-bold text-gray-800">Договоры</h2>
-        {(user?.role === 'tenant' || user?.role === 'admin') && (
-          <button
-            onClick={handleOpenModal} // Используем handleOpenModal вместо setShowModal
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
-          >
-            <Plus className="w-5 h-5" />
-            Создать договор
-          </button>
-        )}
+        <div>
+          <h2 className="text-2xl font-bold text-gray-800">Договоры</h2>
+          <p className="text-gray-600 text-sm mt-1">
+            Всего договоров: {contracts.length} | Показано: {filteredAndSortedContracts.length}
+          </p>
+        </div>
+        <div className="flex gap-2">
+          {/* Кнопка проверки истекших договоров (только для админа и staff) */}
+          {(user?.role === 'admin' || user?.role === 'staff') && (
+            <button
+              onClick={handleCheckExpiredContracts}
+              disabled={checkingExpired}
+              className={`flex items-center gap-2 px-4 py-2 rounded-lg transition-colors ${
+                checkingExpired 
+                  ? 'bg-gray-400 text-white cursor-not-allowed' 
+                  : 'bg-blue-600 text-white hover:bg-blue-700'
+              }`}
+            >
+              {checkingExpired ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  Проверка...
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-5 h-5" />
+                  Проверить завершение
+                </>
+              )}
+            </button>
+          )}
+          {(user?.role === 'tenant' || user?.role === 'admin') && (
+            <button
+              onClick={handleOpenModal}
+              className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
+            >
+              <Plus className="w-5 h-5" />
+              Создать договор
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Фильтры */}
-      <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+      {/* Уведомление о истекающих договорах */}
+      {(user?.role === 'admin' || user?.role === 'staff') && expiringContracts.length > 0 && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 mb-6">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-5 h-5 text-yellow-600" />
+              <span className="font-medium text-yellow-800">
+                Скоро истекают: {expiringContracts.length} договоров
+              </span>
+            </div>
+            <button
+              onClick={loadExpiringContracts}
+              className="text-yellow-600 hover:text-yellow-700 text-sm"
+            >
+              Обновить
+            </button>
+          </div>
+          <div className="mt-2 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+            {expiringContracts.slice(0, 3).map(contract => (
+              <div key={contract.id_договора} className="text-sm text-yellow-700 bg-yellow-100 rounded px-3 py-1">
+                Договор №{contract.id_договора} - {contract.дней_осталось} д.
+              </div>
+            ))}
+            {expiringContracts.length > 3 && (
+              <div className="text-sm text-yellow-600">
+                +{expiringContracts.length - 3} еще...
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Улучшенные фильтры */}
+      <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Поиск</label>
+            <input
+              type="text"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+              placeholder="ID договора, офиса или арендатора..."
+            />
+          </div>
           {user?.role === 'admin' && (
             <>
               <div>
@@ -1580,7 +1807,7 @@ const ContractsTab = () => {
                 <select
                   value={filterStatus}
                   onChange={(e) => setFilterStatus(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                 >
                   <option value="">Все статусы</option>
                   <option value="активен">Активен</option>
@@ -1594,7 +1821,7 @@ const ContractsTab = () => {
                   type="number"
                   value={filterTenantId}
                   onChange={(e) => setFilterTenantId(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                  className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                   placeholder="ID арендатора"
                 />
               </div>
@@ -1602,32 +1829,55 @@ const ContractsTab = () => {
           )}
           {user?.role === 'tenant' && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">Номер договора</label>
+              <label className="block text-sm font-medium text-gray-700 mb-2">ID Договора</label>
               <input
                 type="number"
                 value={filterContractId}
                 onChange={(e) => setFilterContractId(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                placeholder="Номер договора"
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                placeholder="ID договора"
               />
             </div>
           )}
-          <div className="flex items-end">
-            <button
-              onClick={() => {
-                setFilterStatus('');
-                setFilterTenantId('');
-                setFilterContractId('');
-              }}
-              className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Сортировка</label>
+            <select
+              value={sortBy}
+              onChange={(e) => handleSort(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
             >
-              Сбросить фильтры
-            </button>
+              <option value="id_договора">По номеру {getSortIcon('id_договора')}</option>
+              <option value="дата_начала">По дате начала {getSortIcon('дата_начала')}</option>
+              <option value="дата_окончания">По дате окончания {getSortIcon('дата_окончания')}</option>
+              <option value="стоимость">По стоимости {getSortIcon('стоимость')}</option>
+            </select>
           </div>
+        </div>
+        <div className="flex gap-2">
+          <button
+            onClick={() => {
+              loadData();
+              loadExpiringContracts();
+            }}
+            className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            Обновить
+          </button>
+          <button
+            onClick={() => {
+              setFilterStatus('');
+              setFilterTenantId('');
+              setFilterContractId('');
+              setSearchTerm('');
+            }}
+            className="px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 transition-colors"
+          >
+            Сбросить фильтры
+          </button>
         </div>
       </div>
 
-      {filteredContracts.length === 0 ? (
+      {filteredAndSortedContracts.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600 mb-4">
@@ -1636,87 +1886,136 @@ const ContractsTab = () => {
           {(user?.role === 'tenant' || user?.role === 'admin') && (
             <button
               onClick={handleOpenModal}
-              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
             >
               Создать договор
             </button>
           )}
         </div>
       ) : (
-        <div className="grid gap-4">
-          {filteredContracts.map((contract) => (
-            <div key={contract.id_договора} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
-              <div className="flex justify-between items-start mb-4">
-                <div>
-                  <h3 className="font-semibold text-lg text-gray-800">Договор №{contract.id_договора}</h3>
-                  <p className="text-sm text-gray-600 mt-1">ID офиса: {contract.id_офиса}</p>
-                  <p className="text-sm text-gray-600">ID арендатора: {contract.id_арендатора}</p>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {filteredAndSortedContracts.map((contract) => {
+            const statusInfo = getStatusBadge(contract);
+            const daysLeft = calculateDaysLeft(contract.дата_окончания);
+            const canTerminate = user?.role === 'admin' && contract.статус === 'активен';
+            
+            return (
+              <div key={contract.id_договора} className="bg-white rounded-lg shadow-md border border-gray-200 hover:shadow-lg transition-shadow">
+                <div className="p-6">
+                  <div className="flex justify-between items-start mb-4">
+                    <div>
+                      <h3 className="font-semibold text-lg text-gray-800 mb-1">
+                        Договор №{contract.id_договора}
+                      </h3>
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <Building2 className="w-4 h-4" />
+                        <span>Офис: {contract.id_офиса}</span>
+                      </div>
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <Users className="w-4 h-4" />
+                        <span>Арендатор: {contract.id_арендатора}</span>
+                      </div>
+                    </div>
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusInfo.class}`}>
+                      {statusInfo.text}
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                    <div>
+                      <p className="text-gray-600 text-xs">Начало:</p>
+                      <p className="font-medium">{new Date(contract.дата_начала).toLocaleDateString('ru-RU')}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Окончание:</p>
+                      <p className="font-medium">{new Date(contract.дата_окончания).toLocaleDateString('ru-RU')}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Стоимость:</p>
+                      <p className="font-medium text-indigo-600">
+                        {contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-gray-600 text-xs">Осталось дней:</p>
+                      <p className="font-medium text-gray-800">
+                        {daysLeft > 0 ? daysLeft : '0'}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => handleViewDetails(contract)}
+                      className="flex-1 px-4 py-2 border border-indigo-600 text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2"
+                    >
+                      <Eye className="w-4 h-4" />
+                      Подробнее
+                    </button>
+                    
+                    {/* Кнопка расторжения договора (только для админа и активных договоров) */}
+                    {canTerminate && (
+                      <button
+                        onClick={() => handleTerminateContract(contract.id_договора)}
+                        disabled={terminatingContract === contract.id_договора}
+                        className={`px-3 py-2 rounded-lg transition-colors flex items-center justify-center ${
+                          terminatingContract === contract.id_договора
+                            ? 'bg-gray-400 text-white cursor-not-allowed'
+                            : 'bg-red-600 text-white hover:bg-red-700'
+                        }`}
+                      >
+                        {terminatingContract === contract.id_договора ? (
+                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        ) : (
+                          <X className="w-4 h-4" />
+                        )}
+                      </button>
+                    )}
+                  </div>
                 </div>
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  contract.статус === 'активен' ? 'bg-green-100 text-green-700' : 
-                  contract.статус === 'завершён' ? 'bg-gray-100 text-gray-700' : 
-                  'bg-red-100 text-red-700'
-                }`}>
-                  {contract.статус}
-                </span>
               </div>
-              <div className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <p className="text-gray-600">Дата начала:</p>
-                  <p className="font-medium">{new Date(contract.дата_начала).toLocaleDateString('ru-RU')}</p>
-                </div>
-                <div>
-                  <p className="text-gray-600">Дата окончания:</p>
-                  <p className="font-medium">{new Date(contract.дата_окончания).toLocaleDateString('ru-RU')}</p>
-                </div>
-                <div>
-                  <p className="text-gray-600">Стоимость:</p>
-                  <p className="font-medium text-indigo-600">{contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽</p>
-                </div>
-                <div>
-                  <p className="text-gray-600">Дата заключения:</p>
-                  <p className="font-medium">{new Date(contract.дата_заключения).toLocaleDateString('ru-RU')}</p>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
+      {/* Модалка создания договора */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md max-h-[90vh] overflow-y-auto">
             <h3 className="text-xl font-bold mb-4">Создать договор</h3>
             
             {modalLoading ? (
-              <div className="text-center py-8">Загрузка данных...</div>
+              <div className="text-center py-8">
+                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 mx-auto"></div>
+                <p className="text-gray-600 mt-2">Загрузка данных...</p>
+              </div>
             ) : offices.length === 0 ? (
               <div className="text-center py-4">
+                <Building2 className="w-16 h-16 text-gray-400 mx-auto mb-4" />
                 <p className="text-gray-600 mb-4">Нет доступных офисов для аренды</p>
                 <button
                   onClick={() => setShowModal(false)}
-                  className="px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
+                  className="px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400 transition-colors"
                 >
                   Закрыть
                 </button>
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4">
-                {/* Поле выбора арендатора - ТОЛЬКО для админа */}
                 {user?.role === 'admin' && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-1">Арендатор</label>
                     <select
                       value={formData.id_арендатора}
                       onChange={(e) => setFormData({ ...formData, id_арендатора: e.target.value })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                       required
                     >
                       <option value="">Выберите арендатора</option>
                       {tenants.map((tenant) => (
                         <option key={tenant.id_арендатора} value={tenant.id_арендатора}>
                           {tenant.название_компании} (ID: {tenant.id_арендатора})
-                          {tenant.контактное_лицо && ` - ${tenant.контактное_лицо}`}
                         </option>
                       ))}
                     </select>
@@ -1728,48 +2027,52 @@ const ContractsTab = () => {
                   <select
                     value={formData.id_офиса}
                     onChange={(e) => setFormData({ ...formData, id_офиса: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
                     required
                   >
                     <option value="">Выберите офис</option>
                     {offices.map((office) => (
                       <option key={office.id_офиса} value={office.id_офиса}>
-                        Офис {office.номер_офиса} (Этаж {office.этаж}, {office.площадь}м²) - {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
+                        Офис {office.номер_офиса} (Этаж {office.этаж}, {office.площадь}м²)
                       </option>
                     ))}
                   </select>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Дата начала</label>
-                  <input
-                    type="date"
-                    value={formData.дата_начала}
-                    onChange={(e) => setFormData({ ...formData, дата_начала: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                    required
-                  />
+                
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Дата начала</label>
+                    <input
+                      type="date"
+                      value={formData.дата_начала}
+                      onChange={(e) => setFormData({ ...formData, дата_начала: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      required
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Дата окончания</label>
+                    <input
+                      type="date"
+                      value={formData.дата_окончания}
+                      onChange={(e) => setFormData({ ...formData, дата_окончания: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
+                      required
+                    />
+                  </div>
                 </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">Дата окончания</label>
-                  <input
-                    type="date"
-                    value={formData.дата_окончания}
-                    onChange={(e) => setFormData({ ...formData, дата_окончания: e.target.value })}
-                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                    required
-                  />
-                </div>
+
                 <div className="flex gap-2 pt-4">
                   <button
                     type="button"
                     onClick={() => setShowModal(false)}
-                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition-colors"
                   >
                     Отмена
                   </button>
                   <button
                     type="submit"
-                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
                   >
                     Создать
                   </button>
@@ -1779,10 +2082,139 @@ const ContractsTab = () => {
           </div>
         </div>
       )}
+
+      {/* Модалка деталей договора */}
+      {showDetailsModal && selectedContract && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-2xl">
+            <div className="flex justify-between items-start mb-6">
+              <h3 className="text-xl font-bold text-gray-800">
+                Договор №{selectedContract.id_договора}
+              </h3>
+              <button
+                onClick={() => setShowDetailsModal(false)}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            
+            <div className="grid grid-cols-2 gap-6">
+              <div className="space-y-4">
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2">Основная информация</h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">ID Офиса:</span>
+                      <span className="font-medium">{selectedContract.id_офиса}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">ID Арендатора:</span>
+                      <span className="font-medium">{selectedContract.id_арендатора}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Статус:</span>
+                      <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                        getStatusBadge(selectedContract).class
+                      }`}>
+                        {getStatusBadge(selectedContract).text}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+                
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2">Финансы</h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Стоимость:</span>
+                      <span className="font-medium text-indigo-600">
+                        {selectedContract.стоимость ? selectedContract.стоимость.toLocaleString() : '0'} ₽
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              
+              <div className="space-y-4">
+                <div>
+                  <h4 className="font-semibold text-gray-700 mb-2">Даты</h4>
+                  <div className="space-y-2 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Начало:</span>
+                      <span className="font-medium">{new Date(selectedContract.дата_начала).toLocaleDateString('ru-RU')}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Окончание:</span>
+                      <span className="font-medium">{new Date(selectedContract.дата_окончания).toLocaleDateString('ru-RU')}</span>
+                    </div>
+                    <div className="flex justify-between">
+                      <span className="text-gray-600">Заключен:</span>
+                      <span className="font-medium">{new Date(selectedContract.дата_заключения).toLocaleDateString('ru-RU')}</span>
+                    </div>
+                  </div>
+                </div>
+                
+                {selectedContract.статус === 'активен' && (
+                  <div>
+                    <h4 className="font-semibold text-gray-700 mb-2">Прогресс</h4>
+                    <div className="space-y-2 text-sm">
+                      <div className="flex justify-between">
+                        <span className="text-gray-600">Осталось дней:</span>
+                        <span className="font-medium">{calculateDaysLeft(selectedContract.дата_окончания)}</span>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Кнопка расторжения в модалке деталей */}
+            {user?.role === 'admin' && selectedContract.статус === 'активен' && (
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <button
+                  onClick={() => {
+                    setShowDetailsModal(false);
+                    handleTerminateContract(selectedContract.id_договора);
+                  }}
+                  disabled={terminatingContract === selectedContract.id_договора}
+                  className={`w-full px-4 py-2 rounded-lg transition-colors flex items-center justify-center gap-2 ${
+                    terminatingContract === selectedContract.id_договора
+                      ? 'bg-gray-400 text-white cursor-not-allowed'
+                      : 'bg-red-600 text-white hover:bg-red-700'
+                  }`}
+                >
+                  {terminatingContract === selectedContract.id_договора ? (
+                    <>
+                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      Расторжение...
+                    </>
+                  ) : (
+                    <>
+                      <X className="w-4 h-4" />
+                      Расторгнуть договор
+                    </>
+                  )}
+                </button>
+              </div>
+            )}
+
+            {(!user?.role === 'admin' || selectedContract.статус !== 'активен') && (
+              <div className="mt-6 pt-6 border-t border-gray-200">
+                <button
+                  onClick={() => setShowDetailsModal(false)}
+                  className="w-full px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition-colors"
+                >
+                  Закрыть
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
-
 // Payments Tab
 const PaymentsTab = () => {
   const { user } = useAuth();
@@ -1793,6 +2225,7 @@ const PaymentsTab = () => {
   const [showStatusModal, setShowStatusModal] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState(null);
   const [newStatus, setNewStatus] = useState('');
+  const [expandedContracts, setExpandedContracts] = useState(new Set());
 
   useEffect(() => {
     loadPayments();
@@ -1812,6 +2245,19 @@ const PaymentsTab = () => {
       setLoading(false);
     }
   };
+
+  // Группируем платежи по договорам
+  const groupedPayments = payments.reduce((acc, payment) => {
+    const contractId = payment.id_договора;
+    if (!acc[contractId]) {
+      acc[contractId] = [];
+    }
+    acc[contractId].push(payment);
+    return acc;
+  }, {});
+
+  // Получаем список договоров
+  const contracts = Object.keys(groupedPayments);
 
   const handlePayment = async (id) => {
     if (!window.confirm('Подтвердить оплату?')) return;
@@ -1842,7 +2288,6 @@ const PaymentsTab = () => {
   const handleStatusChange = async () => {
     if (!selectedPayment || !newStatus) return;
     try {
-      // Используем существующий эндпоинт для изменения статуса на "оплачен"
       if (newStatus === 'оплачен') {
         await api.payPayment(selectedPayment.id_платежа);
       }
@@ -1859,21 +2304,51 @@ const PaymentsTab = () => {
     loadPayments();
   };
 
+  const toggleContract = (contractId) => {
+    setExpandedContracts(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(contractId)) {
+        newSet.delete(contractId);
+      } else {
+        newSet.add(contractId);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleAllContracts = () => {
+    if (expandedContracts.size === contracts.length) {
+      setExpandedContracts(new Set());
+    } else {
+      setExpandedContracts(new Set(contracts));
+    }
+  };
+
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
 
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Платежи</h2>
-        {(user?.role === 'admin' || user?.role === 'staff' || user?.role === 'tenant') && (
-          <button
-            onClick={checkOverdue}
-            className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700"
-          >
-            <AlertCircle className="w-5 h-5" />
-            Проверить просрочку
-          </button>
-        )}
+        <div className="flex gap-2">
+          {contracts.length > 0 && (
+            <button
+              onClick={toggleAllContracts}
+              className="flex items-center gap-2 bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 text-sm"
+            >
+              {expandedContracts.size === contracts.length ? 'Свернуть все' : 'Развернуть все'}
+            </button>
+          )}
+          {(user?.role === 'admin' || user?.role === 'staff' || user?.role === 'tenant') && (
+            <button
+              onClick={checkOverdue}
+              className="flex items-center gap-2 bg-orange-600 text-white px-4 py-2 rounded-lg hover:bg-orange-700"
+            >
+              <AlertCircle className="w-5 h-5" />
+              Проверить просрочку
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Фильтры */}
@@ -1923,69 +2398,126 @@ const PaymentsTab = () => {
         </div>
       </div>
 
-      {payments.length === 0 ? (
+      {contracts.length === 0 ? (
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <CreditCard className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600">Платежи не найдены</p>
         </div>
       ) : (
-        <div className="bg-white rounded-lg shadow-md overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">ID Договора</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Сумма</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Срок оплаты</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата платежа</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-200">
-              {payments.map((payment) => (
-                <tr key={payment.id_платежа}>
-                  <td className="px-6 py-4 text-sm text-gray-900">№{payment.id_договора}</td>
-                  <td className="px-6 py-4 text-sm font-medium text-gray-900">
-                    {payment.сумма ? payment.сумма.toLocaleString() : '0'} ₽
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-600">
-                    {new Date(payment.срок_оплаты).toLocaleDateString('ru-RU')}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-600">
-                    {payment.дата_платежа ? new Date(payment.дата_платежа).toLocaleDateString('ru-RU') : '—'}
-                  </td>
-                  <td className="px-6 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                      payment.статус === 'оплачен' ? 'bg-green-100 text-green-700' : 
-                      payment.статус === 'просрочен' ? 'bg-red-100 text-red-700' : 
-                      'bg-yellow-100 text-yellow-700'
+        <div className="space-y-4">
+          {contracts.map((contractId) => {
+            const contractPayments = groupedPayments[contractId];
+            const isExpanded = expandedContracts.has(contractId);
+            const totalAmount = contractPayments.reduce((sum, p) => sum + (p.сумма || 0), 0);
+            const paidAmount = contractPayments
+              .filter(p => p.статус === 'оплачен')
+              .reduce((sum, p) => sum + (p.сумма || 0), 0);
+            const pendingAmount = contractPayments
+              .filter(p => p.статус === 'не оплачен')
+              .reduce((sum, p) => sum + (p.сумма || 0), 0);
+            const overdueAmount = contractPayments
+              .filter(p => p.статус === 'просрочен')
+              .reduce((sum, p) => sum + (p.сумма || 0), 0);
+
+            return (
+              <div key={contractId} className="bg-white rounded-lg shadow-md border border-gray-200">
+                {/* Заголовок договора */}
+                <div 
+                  className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50"
+                  onClick={() => toggleContract(contractId)}
+                >
+                  <div className="flex items-center gap-4">
+                    <div className={`w-5 h-5 text-gray-400 transition-transform ${
+                      isExpanded ? 'rotate-90' : ''
                     }`}>
-                      {payment.статус}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 flex gap-2">
-                    {user?.role === 'tenant' && payment.статус === 'не оплачен' && (
-                      <button
-                        onClick={() => handlePayment(payment.id_платежа)}
-                        className="px-3 py-1 bg-green-600 text-white rounded-lg hover:bg-green-700 text-xs"
-                      >
-                        Оплатить
-                      </button>
-                    )}
-                    {user?.role === 'admin' && (
-                      <button
-                        onClick={() => openStatusModal(payment)}
-                        className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-xs flex items-center gap-1"
-                      >
-                        <Edit2 className="w-3 h-3" />
-                        Статус
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                      ▶
+                    </div>
+                    <div>
+                      <h3 className="font-semibold text-lg text-gray-800">
+                        Договор №{contractId}
+                      </h3>
+                      <div className="flex gap-4 text-sm text-gray-600 mt-1">
+                        <span>Всего: {totalAmount.toLocaleString()} ₽</span>
+                        <span className="text-green-600">Оплачено: {paidAmount.toLocaleString()} ₽</span>
+                        <span className="text-yellow-600">Ожидает: {pendingAmount.toLocaleString()} ₽</span>
+                        {overdueAmount > 0 && (
+                          <span className="text-red-600">Просрочено: {overdueAmount.toLocaleString()} ₽</span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="text-sm text-gray-500">
+                    {contractPayments.length} платеж(ей)
+                  </div>
+                </div>
+
+                {/* Содержимое - платежи договора */}
+                {isExpanded && (
+                  <div className="border-t border-gray-200">
+                    <table className="w-full">
+                      <thead className="bg-gray-50">
+                        <tr>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Сумма</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Срок оплаты</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Дата платежа</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
+                          <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Действия</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-200">
+                        {contractPayments.map((payment) => (
+                          <tr key={payment.id_платежа}>
+                            <td className="px-6 py-4 text-sm font-medium text-gray-900">
+                              {payment.сумма ? payment.сумма.toLocaleString() : '0'} ₽
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              {new Date(payment.срок_оплаты).toLocaleDateString('ru-RU')}
+                            </td>
+                            <td className="px-6 py-4 text-sm text-gray-600">
+                              {payment.дата_платежа ? new Date(payment.дата_платежа).toLocaleDateString('ru-RU') : '—'}
+                            </td>
+                            <td className="px-6 py-4">
+                              <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                                payment.статус === 'оплачен' ? 'bg-green-100 text-green-700' : 
+                                payment.статус === 'просрочен' ? 'bg-red-100 text-red-700' : 
+                                'bg-yellow-100 text-yellow-700'
+                              }`}>
+                                {payment.статус}
+                              </span>
+                            </td>
+                            <td className="px-6 py-4 flex gap-2">
+                              {/* ИЗМЕНЕНИЕ: арендатор может оплачивать как неоплаченные, так и просроченные платежи */}
+                              {user?.role === 'tenant' && (payment.статус === 'не оплачен' || payment.статус === 'просрочен') && (
+                                <button
+                                  onClick={() => handlePayment(payment.id_платежа)}
+                                  className={`px-3 py-1 text-white rounded-lg hover:opacity-90 text-xs ${
+                                    payment.статус === 'просрочен' 
+                                      ? 'bg-red-600 hover:bg-red-700' 
+                                      : 'bg-green-600 hover:bg-green-700'
+                                  }`}
+                                >
+                                  {payment.статус === 'просрочен' ? 'Оплатить просрочку' : 'Оплатить'}
+                                </button>
+                              )}
+                              {user?.role === 'admin' && payment.статус !== 'просрочен' && (
+                                <button
+                                  onClick={() => openStatusModal(payment)}
+                                  className="px-3 py-1 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-xs flex items-center gap-1"
+                                >
+                                  <Edit2 className="w-3 h-3" />
+                                  Статус
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -2006,8 +2538,10 @@ const PaymentsTab = () => {
                 >
                   <option value="не оплачен">Не оплачен</option>
                   <option value="оплачен">Оплачен</option>
-                  <option value="просрочен">Просрочен</option>
                 </select>
+                <p className="text-xs text-gray-500 mt-1">
+                  Статус "просрочен" устанавливается автоматически при проверке просрочки
+                </p>
               </div>
               <div className="flex gap-2 pt-4">
                 <button

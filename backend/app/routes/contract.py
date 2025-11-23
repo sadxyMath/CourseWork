@@ -1,12 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import date
 
 from backend.app import models, schemes
 from backend.app.database import get_db
 from backend.app.dependencies import require_role
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
+
 router = APIRouter(
     prefix="/contracts",
     tags=["Договоры"],
@@ -119,11 +121,6 @@ def create_contract(
     return db_contract
 
 
-
-
-
-
-
 # PUT /contracts/{id} — редактирование договора
 # (только admin)
 @router.put("/{contract_id}", response_model=schemes.ContractOut)
@@ -173,3 +170,100 @@ def delete_contract(
     db.commit()
     return None
 
+
+# POST /contracts/check-expired - проверка и завершение истекших договоров
+@router.post("/check-expired", response_model=schemes.ContractExpirationCheckResponse)
+def check_expired_contracts(
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "staff"]))
+):
+    """
+    Проверяет договоры с истекшим сроком и меняет их статус на 'завершён'
+    """
+    try:
+        # Находим активные договоры с истекшим сроком
+        expired_contracts = db.query(models.Contract).filter(
+            models.Contract.дата_окончания < date.today(),
+            models.Contract.статус == 'активен'
+        ).all()
+        
+        completed_count = 0
+        freed_offices_count = 0
+        updated_contracts = []
+        
+        for contract in expired_contracts:
+            # Сохраняем информацию о договоре до изменения
+            contract_info = {
+                "id_договора": contract.id_договора,
+                "id_офиса": contract.id_офиса,
+                "старый_статус": contract.статус
+            }
+            
+            # Меняем статус договора на 'завершён'
+            contract.статус = 'завершён'
+            completed_count += 1
+            
+            # Освобождаем офис
+            office = db.query(models.Office).filter(models.Office.id_офиса == contract.id_офиса).first()
+            if office and office.статус == 'арендуется':
+                office.статус = 'свободен'
+                freed_offices_count += 1
+                contract_info["освобожден_офис"] = True
+            else:
+                contract_info["освобожден_офис"] = False
+            
+            updated_contracts.append(contract_info)
+        
+        db.commit()
+        
+        return {
+            "status": "success",
+            "message": f"Проверка завершена. Завершено договоров: {completed_count}, освобождено офисов: {freed_offices_count}",
+            "completed_contracts": completed_count,
+            "freed_offices": freed_offices_count,
+            "updated_contracts": updated_contracts
+        }
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при проверке истекших договоров: {str(e)}"
+        )
+
+
+# GET /contracts/expiring-soon - договоры, которые скоро истекут
+@router.get("/expiring-soon", response_model=schemes.ExpiringContractsResponse)
+def get_expiring_contracts(
+    days: int = 7,  # за сколько дней предупреждать (по умолчанию 7 дней)
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "staff"]))
+):
+    """
+    Получает договоры, которые истекут в течение указанного количества дней
+    """
+    target_date = date.today() + timedelta(days=days)
+    
+    expiring_contracts = db.query(models.Contract).filter(
+        models.Contract.дата_окончания <= target_date,
+        models.Contract.дата_окончания >= date.today(),
+        models.Contract.статус == 'активен'
+    ).all()
+    
+    contracts_list = []
+    for contract in expiring_contracts:
+        days_left = (contract.дата_окончания - date.today()).days
+        contracts_list.append({
+            "id_договора": contract.id_договора,
+            "id_арендатора": contract.id_арендатора,
+            "id_офиса": contract.id_офиса,
+            "дата_окончания": contract.дата_окончания,
+            "дней_осталось": days_left,
+            "стоимость": contract.стоимость
+        })
+    
+    return {
+        "expiring_contracts": contracts_list,
+        "check_date": date.today(),
+        "days_threshold": days
+    }

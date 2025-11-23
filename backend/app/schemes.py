@@ -189,3 +189,22 @@ class TokenModel(BaseModel):
 class TokenDataForPersonal(BaseModel):
     role: str
 
+class ContractExpirationCheckResponse(BaseModel):
+    status: str
+    message: str
+    completed_contracts: int
+    freed_offices: int
+    updated_contracts: List[dict]
+
+class ExpiringContractInfo(BaseModel):
+    id_договора: int
+    id_арендатора: int
+    id_офиса: int
+    дата_окончания: date
+    дней_осталось: int
+    стоимость: float
+
+class ExpiringContractsResponse(BaseModel):
+    expiring_contracts: List[ExpiringContractInfo]
+    check_date: date
+    days_threshold: int

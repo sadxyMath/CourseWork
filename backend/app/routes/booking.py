@@ -56,18 +56,19 @@ def create_booking(
     if booking.окончание_брони < booking.начало_брони:
         raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
 
-    # Проверяем пересечение по времени с другими бронями
+    # Проверяем пересечение по времени с другими АКТИВНЫМИ бронями
     overlap = db.query(models.Booking).filter(
         models.Booking.id_офиса == booking.id_офиса,
+        models.Booking.статус == "активна",  # Проверяем только активные брони
         models.Booking.начало_брони < booking.окончание_брони,
         models.Booking.окончание_брони > booking.начало_брони
     ).first()
-    annul = db.query(models.Booking).filter(
-        models.Booking.id_офиса == booking.id_офиса,
-        models.Booking.статус == "аннулирована"
-    ).first()
-    if overlap and not annul:
-        raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
+
+    if overlap:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Офис уже забронирован на этот период (бронь №{overlap.id_брони})"
+        )
 
     # Создаем новую бронь
     new_booking = models.Booking(
