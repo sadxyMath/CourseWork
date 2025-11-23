@@ -17,10 +17,12 @@ router = APIRouter(
 def get_all_tenants(
     name: Optional[str] = None,
     phone: Optional[str] = None,
+    tenant_id: Optional[int] = None,
     db: Session = Depends(database.get_db),
     current_user = Depends(require_role(["admin", "staff"]))
 ):
     query = db.query(models.Tenant)
+
     if name:
         query = query.filter(
             or_(
@@ -28,8 +30,13 @@ def get_all_tenants(
                 models.Tenant.контактное_лицо.ilike(f"%{name}%")
             )
         )
+
     if phone:
         query = query.filter(models.Tenant.телефон.ilike(f"%{phone}%"))
+
+    if tenant_id:
+        query = query.filter(models.Tenant.id_арендатора == tenant_id)
+
     return query.all()
 
 # --------------------------
@@ -72,9 +79,7 @@ def create_tenant(
     db.refresh(db_tenant)
     return db_tenant
 
-# --------------------------
 # PUT /tenants/{id} — обновить арендатора
-# --------------------------
 @router.put("/{tenant_id}", response_model=schemes.TenantOut)
 def update_tenant(
     tenant_id: int,
@@ -112,9 +117,7 @@ def update_tenant(
     return db_tenant
 
 
-# --------------------------
 # DELETE /tenants/{id} — удалить арендатора
-# --------------------------
 @router.delete("/{tenant_id}", response_model=dict)
 def delete_tenant(
     tenant_id: int,

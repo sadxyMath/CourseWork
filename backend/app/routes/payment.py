@@ -14,7 +14,7 @@ router = APIRouter(
 )
 
 
-# 🔹 Получить все платежи с фильтрацией
+# Получить все платежи с фильтрацией
 @router.get("/", response_model=List[PaymentOut])
 def get_payments(
     status: Optional[str] = None,
@@ -34,7 +34,7 @@ def get_payments(
 
     # фильтруем по номеру договора
     if contract_number:
-        query = query.filter(Contract.номер_договора == contract_number)
+        query = query.filter(Contract.id_договора == contract_number)
 
     return query.all()
 
@@ -43,7 +43,7 @@ def get_payments(
 def pay_payment(
     payment_id: int,
     db: Session = Depends(get_db),
-    current_user = Depends(require_role(["tenant"]))
+    current_user = Depends(require_role(["tenant","admin"]))
 ):
     db_payment = db.query(Payment).filter(Payment.id_платежа == payment_id).first()
     if not db_payment:
@@ -56,7 +56,7 @@ def pay_payment(
     db.refresh(db_payment)
     return db_payment
 
-# 🔹 Удалить платеж — только admin
+# Удалить платеж — только admin
 @router.delete("/{payment_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_payment(
     payment_id: int,
@@ -72,16 +72,16 @@ def delete_payment(
     return None
 
 
-# 🔹 Проверить просроченные платежи — admin и staff
+# Проверить просроченные платежи — admin и staff
 @router.post("/check-overdue", response_model=dict)
 def check_overdue_payments(
     db: Session = Depends(get_db),
-    current_user = Depends(require_role(["admin", "staff"]))
+    current_user = Depends(require_role(["admin", "staff", "tenant"]))
 ):
     today = date.today()
     overdue = (
         db.query(Payment)
-        .filter(Payment.дата_платежа < today, Payment.статус == "не оплачен")
+        .filter(Payment.срок_оплаты < date.today(), Payment.статус == "не оплачен")
         .all()
     )
 

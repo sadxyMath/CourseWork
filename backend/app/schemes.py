@@ -71,6 +71,7 @@ class ContractUpdate(BaseModel):
     статус: Optional[constr(max_length=20)]
 
 class ContractOut(ContractBase):
+    id_арендатора: int
     id_договора: int
     дата_заключения: date
     class Config:
@@ -114,8 +115,8 @@ class RequestCreate(RequestBase):
     pass
 
 class RequestUpdate(BaseModel):
-    статус: Optional[constr(max_length=20)]
-    текст_заявки: Optional[constr(max_length=500)]
+    статус: Optional[constr(max_length=20)] = None
+    текст_заявки: Optional[constr(max_length=500)] = None
 
 class RequestOut(RequestBase):
     id_заявки: int

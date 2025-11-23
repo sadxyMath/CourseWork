@@ -43,14 +43,15 @@ def create_booking(
     if not office:
         raise HTTPException(status_code=400, detail="Указанный офис не существует")
 
-    # ✅ Проверка: можно бронировать только офисы со статусом "для брони"
-    if office.статус.lower() != "для брони":
+    # Проверка: можно бронировать только офисы со статусом "только для брони"
+    if office.статус.lower() != "только для брони":
         raise HTTPException(status_code=400, detail="Этот офис недоступен для бронирования")
 
     # Проверяем, не бронировал ли этот арендатор уже этот офис
     existing = db.query(models.Booking).filter(
         models.Booking.id_офиса == booking.id_офиса,
-        models.Booking.id_арендатора == tenant_id
+        models.Booking.id_арендатора == tenant_id,
+        models.Booking.статус == "активна"
     ).first()
     if existing:
         raise HTTPException(status_code=400, detail="Вы уже забронировали этот офис")
@@ -65,7 +66,11 @@ def create_booking(
         models.Booking.начало_брони < booking.окончание_брони,
         models.Booking.окончание_брони > booking.начало_брони
     ).first()
-    if overlap:
+    annul = db.query(models.Booking).filter(
+        models.Booking.id_офиса == booking.id_офиса,
+        models.Booking.статус == "аннулирована"
+    ).first()
+    if overlap and not annul:
         raise HTTPException(status_code=400, detail="Офис уже забронирован на этот период")
 
     # Создаем новую бронь

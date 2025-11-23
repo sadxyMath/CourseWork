@@ -12,15 +12,13 @@ router = APIRouter(
     tags=["Договоры"],
 )
 
-# =======================
 # GET /contracts — просмотр всех договоров
-# =======================
 @router.get("/", response_model=List[schemes.ContractOut])
 def get_contracts(
     db: Session = Depends(get_db),
-    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
+    current_user: schemes.TokenData = Depends(require_role(["admin", "tenant", "staff"]))
 ):
-    if current_user.role == "admin":
+    if current_user.role == "admin" or current_user.role == "staff":
         return db.query(models.Contract).all()
     elif current_user.role == "tenant":
         return db.query(models.Contract).filter(
@@ -28,9 +26,8 @@ def get_contracts(
         ).all()
 
 
-# =======================
+
 # GET /contracts/{id} — просмотр конкретного договора
-# =======================
 @router.get("/{contract_id}", response_model=schemes.ContractOut)
 def get_contract(
     contract_id: int,
@@ -48,16 +45,15 @@ def get_contract(
     return contract
 
 
-# =======================
+
 # POST /contracts — создание договора
-# =======================
 @router.post("/", response_model=schemes.ContractOut, status_code=status.HTTP_201_CREATED)
 def create_contract(
     contract: schemes.ContractCreate,
     db: Session = Depends(get_db),
     current_user: schemes.TokenData = Depends(require_role(["admin", "tenant"]))
 ):
-    # --- Проверка офиса ---
+    #Проверка офиса
     office = db.query(models.Office).filter(models.Office.id_офиса == contract.id_офиса).first()
     if not office:
         raise HTTPException(status_code=404, detail="Офис не найден")
@@ -65,34 +61,34 @@ def create_contract(
     if office.статус != "свободен":
         raise HTTPException(status_code=400, detail="Офис уже недоступен для аренды")
 
-    # --- Проверка арендатора ---
+    #Проверка арендатора
     tenant = db.query(models.Tenant).filter(models.Tenant.id_арендатора == current_user.tenant_id).first()
     if not tenant and current_user.role != "admin":
         raise HTTPException(status_code=400, detail="Арендатор не найден")
 
-    # --- Проверка прав доступа ---
+    #Проверка прав доступа
     # Арендатор может создавать договор только для себя
     if current_user.role == "tenant" and tenant.id_арендатора != current_user.tenant_id:
         raise HTTPException(status_code=403, detail="Вы можете создавать договоры только для себя")
 
-    # --- Проверка дат ---
+    # Проверка дат
     if contract.дата_окончания < contract.дата_начала:
         raise HTTPException(status_code=400, detail="Дата окончания не может быть раньше даты начала")
 
-    # --- Создание договора ---
+    #Создание договора
     if current_user.role == "tenant":
         data = contract.dict()
         data["id_арендатора"] = current_user.tenant_id
     else:
         data = contract.dict()
 
-   # --- Расчёт стоимости ---
+   # Расчёт стоимости 
     duration_days = (contract.дата_окончания - contract.дата_начала).days + 1
     monthly_price = office.стоимость
-    total_price = round((monthly_price / 30) * duration_days, 2)  # создаём total_price
+    total_price = round((monthly_price / 30) * duration_days, 2)  
     data["стоимость"] = total_price
 
-    # --- Статус договора ---
+    # Статус договора
     data["статус"] = "активен"
 
     db_contract = models.Contract(**data)
@@ -102,7 +98,7 @@ def create_contract(
     db.commit()
     db.refresh(db_contract)
 
-    # --- Создание помесячных платежей ---
+    #Создание помесячных платежей 
     months = max(1, (duration_days + 29) // 30)
     monthly_payment_amount = round(total_price / months, 2)
 
@@ -127,10 +123,8 @@ def create_contract(
 
 
 
-# =======================
 # PUT /contracts/{id} — редактирование договора
 # (только admin)
-# =======================
 @router.put("/{contract_id}", response_model=schemes.ContractOut)
 def update_contract(
     contract_id: int,
@@ -156,10 +150,8 @@ def update_contract(
     return db_contract
 
 
-# =======================
 # DELETE /contracts/{id} — удаление договора
 # (только admin)
-# =======================
 @router.delete("/{contract_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_contract(
     contract_id: int,
