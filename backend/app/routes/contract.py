@@ -12,18 +12,19 @@ router = APIRouter(
     tags=["Договоры"],
 )
 
-# GET /contracts — просмотр всех договоров
 @router.get("/", response_model=List[schemes.ContractOut])
 def get_contracts(
     db: Session = Depends(get_db),
     current_user: schemes.TokenData = Depends(require_role(["admin", "tenant", "staff"]))
 ):
-    if current_user.role == "admin" or current_user.role == "staff":
-        return db.query(models.Contract).all()
-    elif current_user.role == "tenant":
-        return db.query(models.Contract).filter(
-            models.Contract.id_арендатора == current_user.tenant_id
-        ).all()
+    query = db.query(models.Contract)
+    
+    if current_user.role == "tenant":
+        # Для арендатора используем id пользователя как tenant_id
+        # так как у арендатора id пользователя = id арендатора
+        query = query.filter(models.Contract.id_арендатора == current_user.tenant_id)
+    
+    return query.all()
 
 
 

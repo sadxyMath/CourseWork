@@ -388,7 +388,10 @@ const RequestsTab = () => {
               <div className="flex justify-between items-start mb-4">
                 <div>
                   <h3 className="font-semibold text-lg text-gray-800">Заявка №{request.id_заявки}</h3>
-                  <p className="text-sm text-gray-600 mt-1">Договор №{request.id_договора}</p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Договор №{request.id_договора}
+                    {request.номер_офиса && ` • Офис: ${request.номер_офиса}`}
+                  </p>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                   request.статус === 'новая' ? 'bg-blue-100 text-blue-700' : 
@@ -520,7 +523,9 @@ const RequestsTab = () => {
 };
 
 // Tenants Tab
+// Tenants Tab
 const TenantsTab = () => {
+  const { user } = useAuth(); // Добавляем useAuth для получения роли пользователя
   const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -569,13 +574,16 @@ const TenantsTab = () => {
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Арендаторы</h2>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
-        >
-          <Plus className="w-5 h-5" />
-          Добавить арендатора
-        </button>
+        {/* Показываем кнопку только для admin, скрываем для staff */}
+        {user?.role === 'admin' && (
+          <button
+            onClick={() => setShowModal(true)}
+            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+          >
+            <Plus className="w-5 h-5" />
+            Добавить арендатора
+          </button>
+        )}
       </div>
 
       {/* Фильтр */}
@@ -615,12 +623,15 @@ const TenantsTab = () => {
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <Users className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600 mb-4">Арендаторы не найдены</p>
-          <button
-            onClick={() => setShowModal(true)}
-            className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
-          >
-            Добавить арендатора
-          </button>
+          {/* Показываем кнопку только для admin */}
+          {user?.role === 'admin' && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+            >
+              Добавить арендатора
+            </button>
+          )}
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
@@ -642,8 +653,8 @@ const TenantsTab = () => {
         </div>
       )}
 
-      {/* Modal создания арендатора */}
-      {showModal && (
+      {/* Modal создания арендатора - показываем только для admin */}
+      {showModal && user?.role === 'admin' && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">Новый арендатор</h3>
@@ -1457,7 +1468,9 @@ const ContractsTab = () => {
   const { user } = useAuth();
   const [contracts, setContracts] = useState([]);
   const [offices, setOffices] = useState([]);
+  const [tenants, setTenants] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [modalLoading, setModalLoading] = useState(false); // Отдельный loading для модалки
   const [showModal, setShowModal] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
   const [filterTenantId, setFilterTenantId] = useState('');
@@ -1465,26 +1478,55 @@ const ContractsTab = () => {
   const [formData, setFormData] = useState({
     id_офиса: '',
     дата_начала: '',
-    дата_окончания: ''
+    дата_окончания: '',
+    id_арендатора: user?.role === 'tenant' ? user.id : ''
   });
 
   useEffect(() => {
     loadData();
   }, []);
 
+  // Загружаем только договоры при открытии таба
   const loadData = async () => {
     try {
-      const [contractsData, officesData] = await Promise.all([
-        api.getContracts(),
-        api.getOffices({ status: 'свободен' })
-      ]);
+      const contractsData = await api.getContracts();
       setContracts(contractsData);
-      setOffices(officesData);
     } catch (error) {
-      console.error(error);
+      console.error('Ошибка загрузки договоров:', error);
+      setContracts([]);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Загружаем офисы и арендаторов только при открытии модалки
+  const loadModalData = async () => {
+    setModalLoading(true);
+    try {
+      const [officesData, tenantsData] = await Promise.all([
+        // Загружаем офисы только если пользователь может создавать договоры
+        (user?.role === 'tenant' || user?.role === 'admin') 
+          ? api.getOffices({ status: 'свободен' })
+          : Promise.resolve([]),
+        // Загружаем арендаторов только для админа
+        user?.role === 'admin' ? api.getTenants() : Promise.resolve([])
+      ]);
+      
+      setOffices(officesData);
+      setTenants(tenantsData);
+    } catch (error) {
+      console.error('Ошибка загрузки данных для модалки:', error);
+      setOffices([]);
+      setTenants([]);
+    } finally {
+      setModalLoading(false);
+    }
+  };
+
+  // Открываем модалку и загружаем данные для нее
+  const handleOpenModal = async () => {
+    await loadModalData();
+    setShowModal(true);
   };
 
   const handleSubmit = async (e) => {
@@ -1492,8 +1534,13 @@ const ContractsTab = () => {
     try {
       await api.createContract(formData);
       setShowModal(false);
-      setFormData({ id_офиса: '', дата_начала: '', дата_окончания: '' });
-      loadData();
+      setFormData({ 
+        id_офиса: '', 
+        дата_начала: '', 
+        дата_окончания: '',
+        id_арендатора: user?.role === 'tenant' ? user.id : '' 
+      });
+      loadData(); // Перезагружаем список договоров
     } catch (error) {
       alert(error.message);
     }
@@ -1514,7 +1561,7 @@ const ContractsTab = () => {
         <h2 className="text-2xl font-bold text-gray-800">Договоры</h2>
         {(user?.role === 'tenant' || user?.role === 'admin') && (
           <button
-            onClick={() => setShowModal(true)}
+            onClick={handleOpenModal} // Используем handleOpenModal вместо setShowModal
             className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
           >
             <Plus className="w-5 h-5" />
@@ -1588,7 +1635,7 @@ const ContractsTab = () => {
           </p>
           {(user?.role === 'tenant' || user?.role === 'admin') && (
             <button
-              onClick={() => setShowModal(true)}
+              onClick={handleOpenModal}
               className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
             >
               Создать договор
@@ -1640,7 +1687,10 @@ const ContractsTab = () => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">Создать договор</h3>
-            {offices.length === 0 ? (
+            
+            {modalLoading ? (
+              <div className="text-center py-8">Загрузка данных...</div>
+            ) : offices.length === 0 ? (
               <div className="text-center py-4">
                 <p className="text-gray-600 mb-4">Нет доступных офисов для аренды</p>
                 <button
@@ -1652,6 +1702,27 @@ const ContractsTab = () => {
               </div>
             ) : (
               <form onSubmit={handleSubmit} className="space-y-4">
+                {/* Поле выбора арендатора - ТОЛЬКО для админа */}
+                {user?.role === 'admin' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">Арендатор</label>
+                    <select
+                      value={formData.id_арендатора}
+                      onChange={(e) => setFormData({ ...formData, id_арендатора: e.target.value })}
+                      className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                      required
+                    >
+                      <option value="">Выберите арендатора</option>
+                      {tenants.map((tenant) => (
+                        <option key={tenant.id_арендатора} value={tenant.id_арендатора}>
+                          {tenant.название_компании} (ID: {tenant.id_арендатора})
+                          {tenant.контактное_лицо && ` - ${tenant.контактное_лицо}`}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
+                
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">Офис</label>
                   <select

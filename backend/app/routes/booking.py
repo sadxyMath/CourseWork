@@ -22,11 +22,7 @@ def get_all_bookings(
         user_bookings = db.query(models.Booking).filter(
             models.Booking.id_арендатора == tenant_id
         ).all()
-        if not user_bookings:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="У вас нет забронированных офисов. Чтобы это сделать, перейдите к просмотру офисов"
-            )
+
         return user_bookings
 
 

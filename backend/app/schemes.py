@@ -121,6 +121,7 @@ class RequestUpdate(BaseModel):
 class RequestOut(RequestBase):
     id_заявки: int
     дата_подачи: date
+    номер_офиса: str
 
     class Config:
         from_attributes = True
