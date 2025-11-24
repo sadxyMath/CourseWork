@@ -35,6 +35,8 @@ class OfficeBase(BaseModel):
     стоимость: conint(gt=0)
     статус: constr(max_length=20)
 
+class OfficeShort(BaseModel):
+    номер_офиса: str
 class OfficeCreate(OfficeBase):
     pass
 
@@ -74,6 +76,7 @@ class ContractOut(ContractBase):
     id_арендатора: int
     id_договора: int
     дата_заключения: date
+    номер_офиса: Optional[str] = None 
     class Config:
         from_attributes = True
 

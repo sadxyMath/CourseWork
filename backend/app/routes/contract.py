@@ -8,25 +8,43 @@ from backend.app.database import get_db
 from backend.app.dependencies import require_role
 from datetime import timedelta
 from dateutil.relativedelta import relativedelta
+from sqlalchemy.orm import joinedload
 
 router = APIRouter(
     prefix="/contracts",
     tags=["Договоры"],
 )
 
+
+
 @router.get("/", response_model=List[schemes.ContractOut])
 def get_contracts(
     db: Session = Depends(get_db),
     current_user: schemes.TokenData = Depends(require_role(["admin", "tenant", "staff"]))
 ):
-    query = db.query(models.Contract)
+    query = db.query(models.Contract).options(
+        joinedload(models.Contract.офис)  # Жадная загрузка офиса
+    )
     
     if current_user.role == "tenant":
-        # Для арендатора используем id пользователя как tenant_id
-        # так как у арендатора id пользователя = id арендатора
         query = query.filter(models.Contract.id_арендатора == current_user.tenant_id)
     
-    return query.all()
+    contracts = query.all()
+    result = []
+    for contract in contracts:
+        result.append(schemes.ContractOut(
+            id_договора=contract.id_договора,
+            id_арендатора=contract.id_арендатора,
+            id_офиса=contract.id_офиса,
+            дата_начала=contract.дата_начала,
+            дата_окончания=contract.дата_окончания,
+            стоимость=float(contract.стоимость),  # Конвертируем в float если нужно
+            дата_заключения=contract.дата_заключения,
+            статус=contract.статус,
+            номер_офиса=contract.офис.номер_офиса if contract.офис else None
+        ))
+    
+    return result
 
 
 

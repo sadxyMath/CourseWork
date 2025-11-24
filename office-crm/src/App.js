@@ -1244,6 +1244,7 @@ const OfficesTab = () => {
 };
 
 // Bookings Tab
+// Bookings Tab
 const BookingsTab = () => {
   const { user } = useAuth();
   const [bookings, setBookings] = useState([]);
@@ -1371,6 +1372,9 @@ const BookingsTab = () => {
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Офис</th>
+                {user?.role === 'admin' && (
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Арендатор</th>
+                )}
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Начало</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Окончание</th>
                 <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Статус</th>
@@ -1385,6 +1389,11 @@ const BookingsTab = () => {
                   <td className="px-6 py-4 text-sm text-gray-900">
                     Офис {offices.find(o => o.id_офиса === booking.id_офиса)?.номер_офиса || booking.id_офиса}
                   </td>
+                  {user?.role === 'admin' && (
+                    <td className="px-6 py-4 text-sm text-gray-600">
+                      ID {booking.id_арендатора}
+                    </td>
+                  )}
                   <td className="px-6 py-4 text-sm text-gray-600">
                     {new Date(booking.начало_брони).toLocaleDateString('ru-RU')}
                   </td>
@@ -1672,7 +1681,8 @@ const ContractsTab = () => {
         return (
           contract.id_договора.toString().includes(searchLower) ||
           contract.id_офиса.toString().includes(searchLower) ||
-          contract.id_арендатора.toString().includes(searchLower)
+          contract.id_арендатора.toString().includes(searchLower) ||
+          (contract.номер_офиса && contract.номер_офиса.toLowerCase().includes(searchLower)) // Добавляем поиск по номеру офиса
         );
       }
       return true;
@@ -1894,89 +1904,89 @@ const ContractsTab = () => {
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filteredAndSortedContracts.map((contract) => {
-            const statusInfo = getStatusBadge(contract);
-            const daysLeft = calculateDaysLeft(contract.дата_окончания);
-            const canTerminate = user?.role === 'admin' && contract.статус === 'активен';
-            
-            return (
-              <div key={contract.id_договора} className="bg-white rounded-lg shadow-md border border-gray-200 hover:shadow-lg transition-shadow">
-                <div className="p-6">
-                  <div className="flex justify-between items-start mb-4">
-                    <div>
-                      <h3 className="font-semibold text-lg text-gray-800 mb-1">
-                        Договор №{contract.id_договора}
-                      </h3>
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Building2 className="w-4 h-4" />
-                        <span>Офис: {contract.id_офиса}</span>
-                      </div>
-                      <div className="flex items-center gap-2 text-sm text-gray-600">
-                        <Users className="w-4 h-4" />
-                        <span>Арендатор: {contract.id_арендатора}</span>
-                      </div>
+        {filteredAndSortedContracts.map((contract) => {
+          const statusInfo = getStatusBadge(contract);
+          const daysLeft = calculateDaysLeft(contract.дата_окончания);
+          const canTerminate = user?.role === 'admin' && contract.статус === 'активен';
+          
+          return (
+            <div key={contract.id_договора} className="bg-white rounded-lg shadow-md border border-gray-200 hover:shadow-lg transition-shadow">
+              <div className="p-6">
+                <div className="flex justify-between items-start mb-4">
+                  <div>
+                    <h3 className="font-semibold text-lg text-gray-800 mb-1">
+                      Договор №{contract.id_договора}
+                    </h3>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Building2 className="w-4 h-4" />
+                      <span>Офис: {contract.номер_офиса || `ID: ${contract.id_офиса}`}</span>
                     </div>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusInfo.class}`}>
-                      {statusInfo.text}
-                    </span>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 text-sm mb-4">
-                    <div>
-                      <p className="text-gray-600 text-xs">Начало:</p>
-                      <p className="font-medium">{new Date(contract.дата_начала).toLocaleDateString('ru-RU')}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600 text-xs">Окончание:</p>
-                      <p className="font-medium">{new Date(contract.дата_окончания).toLocaleDateString('ru-RU')}</p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600 text-xs">Стоимость:</p>
-                      <p className="font-medium text-indigo-600">
-                        {contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽
-                      </p>
-                    </div>
-                    <div>
-                      <p className="text-gray-600 text-xs">Осталось дней:</p>
-                      <p className="font-medium text-gray-800">
-                        {daysLeft > 0 ? daysLeft : '0'}
-                      </p>
+                    <div className="flex items-center gap-2 text-sm text-gray-600">
+                      <Users className="w-4 h-4" />
+                      <span>Арендатор: {contract.id_арендатора}</span>
                     </div>
                   </div>
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusInfo.class}`}>
+                    {statusInfo.text}
+                  </span>
+                </div>
 
-                  <div className="flex gap-2">
-                    <button
-                      onClick={() => handleViewDetails(contract)}
-                      className="flex-1 px-4 py-2 border border-indigo-600 text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2"
-                    >
-                      <Eye className="w-4 h-4" />
-                      Подробнее
-                    </button>
-                    
-                    {/* Кнопка расторжения договора (только для админа и активных договоров) */}
-                    {canTerminate && (
-                      <button
-                        onClick={() => handleTerminateContract(contract.id_договора)}
-                        disabled={terminatingContract === contract.id_договора}
-                        className={`px-3 py-2 rounded-lg transition-colors flex items-center justify-center ${
-                          terminatingContract === contract.id_договора
-                            ? 'bg-gray-400 text-white cursor-not-allowed'
-                            : 'bg-red-600 text-white hover:bg-red-700'
-                        }`}
-                      >
-                        {terminatingContract === contract.id_договора ? (
-                          <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                        ) : (
-                          <X className="w-4 h-4" />
-                        )}
-                      </button>
-                    )}
+                <div className="grid grid-cols-2 gap-4 text-sm mb-4">
+                  <div>
+                    <p className="text-gray-600 text-xs">Начало:</p>
+                    <p className="font-medium">{new Date(contract.дата_начала).toLocaleDateString('ru-RU')}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600 text-xs">Окончание:</p>
+                    <p className="font-medium">{new Date(contract.дата_окончания).toLocaleDateString('ru-RU')}</p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600 text-xs">Стоимость:</p>
+                    <p className="font-medium text-indigo-600">
+                      {contract.стоимость ? contract.стоимость.toLocaleString() : '0'} ₽
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-gray-600 text-xs">Осталось дней:</p>
+                    <p className="font-medium text-gray-800">
+                      {daysLeft > 0 ? daysLeft : '0'}
+                    </p>
                   </div>
                 </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => handleViewDetails(contract)}
+                    className="flex-1 px-4 py-2 border border-indigo-600 text-indigo-600 rounded-lg hover:bg-indigo-50 transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Eye className="w-4 h-4" />
+                    Подробнее
+                  </button>
+                  
+                  {/* Кнопка расторжения договора (только для админа и активных договоров) */}
+                  {canTerminate && (
+                    <button
+                      onClick={() => handleTerminateContract(contract.id_договора)}
+                      disabled={terminatingContract === contract.id_договора}
+                      className={`px-3 py-2 rounded-lg transition-colors flex items-center justify-center ${
+                        terminatingContract === contract.id_договора
+                          ? 'bg-gray-400 text-white cursor-not-allowed'
+                          : 'bg-red-600 text-white hover:bg-red-700'
+                      }`}
+                    >
+                      {terminatingContract === contract.id_договора ? (
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                      ) : (
+                        <X className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
+                </div>
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
+      </div>
       )}
 
       {/* Модалка создания договора */}
@@ -2105,8 +2115,8 @@ const ContractsTab = () => {
                   <h4 className="font-semibold text-gray-700 mb-2">Основная информация</h4>
                   <div className="space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-gray-600">ID Офиса:</span>
-                      <span className="font-medium">{selectedContract.id_офиса}</span>
+                      <span className="text-gray-600">Офис:</span>
+                      <span className="font-medium">{selectedContract.номер_офиса || `ID: ${selectedContract.id_офиса}`}</span>
                     </div>
                     <div className="flex justify-between">
                       <span className="text-gray-600">ID Арендатора:</span>
