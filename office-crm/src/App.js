@@ -1,5 +1,5 @@
 import React, { useState, useEffect, createContext, useContext } from 'react';
-import { AlertCircle, Building2, FileText, Calendar, CreditCard, Users, ClipboardList, LogOut, Menu, X, Plus, Edit2, Trash2, Eye, Filter, RefreshCw,AlertTriangle } from 'lucide-react';
+import { AlertCircle, Building2, FileText, Calendar, CreditCard, Users,Building, Maximize, DollarSign, ClipboardList, LogOut, Menu, X, Plus, Edit2, Trash2, Eye, Filter, RefreshCw,AlertTriangle } from 'lucide-react';
 
 // API Configuration
 const API_BASE_URL = 'http://localhost:8001';
@@ -114,6 +114,34 @@ class ApiService {
 
   async deleteBooking(id) {
     return this.request(`/bookings/${id}`, { method: 'DELETE' });
+  }
+  
+  async checkExpiredBookings(autoUpdate = true) {
+    return this.request(`/bookings/check-expired?auto_update=${autoUpdate}`);
+  }
+
+  async getExpiredBookings() {
+    return this.request('/bookings/expired');
+  }
+
+  async getActiveExpiringBookings(days = 7) {
+    return this.request(`/bookings/active-expiring?days_threshold=${days}`);
+  }
+
+  async bulkExpireBookings() {
+    return this.request('/bookings/bulk-expire', {
+      method: 'POST'
+    });
+  }
+
+  async getBookingStats() {
+    return this.request('/bookings/stats');
+  }
+
+  async forceExpireBooking(id) {
+    return this.request(`/bookings/force-expire/${id}`, {
+      method: 'POST'
+    });
   }
 
    // Contracts
@@ -1055,6 +1083,7 @@ const OfficesTab = () => {
   const [newStatus, setNewStatus] = useState('');
   const [filterStatus, setFilterStatus] = useState('');
   const [filterFloor, setFilterFloor] = useState('');
+  const [filterOfficeNumber, setFilterOfficeNumber] = useState(''); // Новый фильтр по номеру офиса
 
   useEffect(() => {
     loadOffices();
@@ -1065,6 +1094,7 @@ const OfficesTab = () => {
       const params = {};
       if (filterStatus) params.status = filterStatus;
       if (filterFloor) params.floor = filterFloor;
+      if (filterOfficeNumber) params.office_number = filterOfficeNumber; // Добавляем параметр
       
       const data = await api.getOffices(params);
       setOffices(data);
@@ -1099,6 +1129,18 @@ const OfficesTab = () => {
     loadOffices();
   };
 
+  const resetFilters = () => {
+    setFilterStatus('');
+    setFilterFloor('');
+    setFilterOfficeNumber('');
+    loadOffices();
+  };
+
+  // Функция для форматированного отображения номера офиса
+  const formatOfficeNumber = (number) => {
+    return number || 'Без номера';
+  };
+
   return (
     <div>
       <div className="flex justify-between items-center mb-6">
@@ -1107,7 +1149,17 @@ const OfficesTab = () => {
 
       {/* Фильтры */}
       <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">Номер офиса</label>
+            <input
+              type="text"
+              value={filterOfficeNumber}
+              onChange={(e) => setFilterOfficeNumber(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              placeholder="Например: 101, 202"
+            />
+          </div>
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
             <select
@@ -1141,11 +1193,7 @@ const OfficesTab = () => {
               Применить
             </button>
             <button
-              onClick={() => {
-                setFilterStatus('');
-                setFilterFloor('');
-                loadOffices();
-              }}
+              onClick={resetFilters}
               className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
             >
               Сбросить
@@ -1154,16 +1202,76 @@ const OfficesTab = () => {
         </div>
       </div>
 
+      {/* Информация о фильтрах */}
+      {(filterStatus || filterFloor || filterOfficeNumber) && (
+        <div className="mb-4 p-3 bg-blue-50 text-blue-800 rounded-lg text-sm">
+          Активные фильтры:
+          {filterOfficeNumber && <span className="ml-2 px-2 py-1 bg-blue-100 rounded">Номер: {filterOfficeNumber}</span>}
+          {filterStatus && <span className="ml-2 px-2 py-1 bg-blue-100 rounded">Статус: {filterStatus}</span>}
+          {filterFloor && <span className="ml-2 px-2 py-1 bg-blue-100 rounded">Этаж: {filterFloor}</span>}
+          <button 
+            onClick={resetFilters}
+            className="ml-2 text-blue-600 hover:text-blue-800 underline"
+          >
+            Очистить все
+          </button>
+        </div>
+      )}
+
+      {/* Статистика */}
+      {offices.length > 0 && (
+        <div className="mb-6 grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="bg-white rounded-lg shadow p-4">
+            <div className="text-sm text-gray-500">Всего офисов</div>
+            <div className="text-2xl font-bold">{offices.length}</div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <div className="text-sm text-gray-500">Свободных</div>
+            <div className="text-2xl font-bold text-green-600">
+              {offices.filter(o => o.статус === 'свободен').length}
+            </div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <div className="text-sm text-gray-500">Для брони</div>
+            <div className="text-2xl font-bold text-blue-600">
+              {offices.filter(o => o.статус === 'только для брони').length}
+            </div>
+          </div>
+          <div className="bg-white rounded-lg shadow p-4">
+            <div className="text-sm text-gray-500">Арендуются</div>
+            <div className="text-2xl font-bold text-red-600">
+              {offices.filter(o => o.статус === 'арендуется').length}
+            </div>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="text-center py-8">Загрузка...</div>
       ) : offices.length === 0 ? (
-        <div className="text-center py-8 text-gray-500">Офисы не найдены</div>
+        <div className="bg-white rounded-lg shadow-md p-8 text-center">
+          <Building className="w-16 h-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600 mb-4">
+            Офисы не найдены по выбранным фильтрам
+          </p>
+          <button
+            onClick={resetFilters}
+            className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700"
+          >
+            Показать все офисы
+          </button>
+        </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {offices.map((office) => (
-            <div key={office.id_офиса} className="bg-white rounded-lg shadow-md p-6 border border-gray-200">
+            <div key={office.id_офиса} className="bg-white rounded-lg shadow-md p-6 border border-gray-200 hover:shadow-lg transition-shadow duration-200">
               <div className="flex justify-between items-start mb-4">
-                <h3 className="font-semibold text-lg text-gray-800">Офис {office.номер_офиса || 'Без номера'}</h3>
+                <div>
+                  <h3 className="font-semibold text-lg text-gray-800">
+                    Офис {formatOfficeNumber(office.номер_офиса)}
+                  </h3>
+                  <p className="text-sm text-gray-500">ID: {office.id_офиса}</p>
+                </div>
                 <span className={`px-3 py-1 rounded-full text-xs font-medium ${
                   office.статус === 'свободен' ? 'bg-green-100 text-green-700' : 
                   office.статус === 'только для брони' ? 'bg-blue-100 text-blue-700' :
@@ -1174,17 +1282,26 @@ const OfficesTab = () => {
                 </span>
               </div>
               <div className="space-y-2 text-sm text-gray-600">
-                <p>Этаж: {office.этаж || 0}</p>
-                <p>Площадь: {office.площадь || 0} м²</p>
-                <p className="font-semibold text-gray-800">
-                  {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
-                </p>
+                <div className="flex items-center gap-2">
+                  <Building className="w-4 h-4 text-gray-400" />
+                  <span>Этаж: {office.этаж || 0}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Maximize className="w-4 h-4 text-gray-400" />
+                  <span>Площадь: {office.площадь || 0} м²</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <DollarSign className="w-4 h-4 text-gray-400" />
+                  <span className="font-semibold text-gray-800">
+                    {office.стоимость ? office.стоимость.toLocaleString() : '0'} ₽/мес
+                  </span>
+                </div>
               </div>
               {user?.role === 'admin' && (
                 <div className="mt-4">
                   <button
                     onClick={() => openStatusModal(office)}
-                    className="w-full flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 px-3 py-2 rounded-lg hover:bg-indigo-100"
+                    className="w-full flex items-center justify-center gap-2 bg-indigo-50 text-indigo-600 px-3 py-2 rounded-lg hover:bg-indigo-100 transition-colors duration-200"
                   >
                     <Edit2 className="w-4 h-4" />
                     Изменить статус
@@ -1204,6 +1321,10 @@ const OfficesTab = () => {
               Изменить статус офиса {selectedOffice.номер_офиса}
             </h3>
             <div className="space-y-4">
+              <div className="p-3 bg-gray-50 rounded-lg">
+                <p className="text-sm text-gray-600">Текущий статус:</p>
+                <p className="font-medium">{selectedOffice.статус}</p>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Новый статус</label>
                 <select
@@ -1211,6 +1332,7 @@ const OfficesTab = () => {
                   onChange={(e) => setNewStatus(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 >
+                  <option value="">Выберите статус</option>
                   <option value="свободен">Свободен</option>
                   <option value="арендуется">Арендуется</option>
                   <option value="только для брони">Только для брони</option>
@@ -1223,6 +1345,7 @@ const OfficesTab = () => {
                   onClick={() => {
                     setShowStatusModal(false);
                     setSelectedOffice(null);
+                    setNewStatus('');
                   }}
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
                 >
@@ -1230,7 +1353,12 @@ const OfficesTab = () => {
                 </button>
                 <button
                   onClick={handleStatusChange}
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  disabled={!newStatus}
+                  className={`flex-1 px-4 py-2 rounded-lg ${
+                    newStatus 
+                      ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
                 >
                   Сохранить
                 </button>
@@ -1244,7 +1372,6 @@ const OfficesTab = () => {
 };
 
 // Bookings Tab
-// Bookings Tab
 const BookingsTab = () => {
   const { user } = useAuth();
   const [bookings, setBookings] = useState([]);
@@ -1252,12 +1379,16 @@ const BookingsTab = () => {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [filterStatus, setFilterStatus] = useState('');
+  const [filterOffice, setFilterOffice] = useState(''); // Фильтр по офису
   const [formData, setFormData] = useState({
     id_офиса: '',
     начало_брони: '',
     окончание_брони: '',
     статус: 'активна'
   });
+  const [showCheckModal, setShowCheckModal] = useState(false);
+  const [checkExpiredLoading, setCheckExpiredLoading] = useState(false);
+  const [checkResult, setCheckResult] = useState(null);
 
   useEffect(() => {
     loadData();
@@ -1265,17 +1396,39 @@ const BookingsTab = () => {
 
   const loadData = async () => {
     try {
-      const bookingsData = await api.getBookings();
-      // Всегда загружаем офисы со статусом "только для брони"
-      const allOffices = await api.getOffices({ status: 'только для брони' });
+      const [bookingsData, officesData] = await Promise.all([
+        api.getBookings(),
+        api.getOffices({ status: 'только для брони' }),
+      ]);
+      
       setBookings(Array.isArray(bookingsData) ? bookingsData : []);
-      setOffices(Array.isArray(allOffices) ? allOffices : []);
+      setOffices(Array.isArray(officesData) ? officesData : []);
     } catch (error) {
       console.error(error);
       setBookings([]);
       setOffices([]);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleCheckExpired = async () => {
+    setCheckExpiredLoading(true);
+    try {
+      const result = await api.checkExpiredBookings();
+      setCheckResult(result);
+      // Обновляем данные
+      await loadData();
+      
+      // Автоматически закрываем модалку через 3 секунды
+      setTimeout(() => {
+        setShowCheckModal(false);
+        setCheckResult(null);
+      }, 3000);
+    } catch (error) {
+      alert('Ошибка при проверке истекших броней: ' + error.message);
+    } finally {
+      setCheckExpiredLoading(false);
     }
   };
 
@@ -1301,9 +1454,34 @@ const BookingsTab = () => {
     }
   };
 
-  const filteredBookings = filterStatus 
-    ? bookings.filter(b => b.статус === filterStatus)
-    : bookings;
+  // Функция для получения номера офиса по ID
+  const getOfficeNumber = (officeId) => {
+    const office = offices.find(o => o.id_офиса === officeId);
+    return office ? `Офис ${office.номер_офиса}` : `Офис ${officeId}`;
+  };
+
+  // Фильтрация броней
+  const filteredBookings = bookings.filter(booking => {
+    // Фильтр по статусу
+    if (filterStatus && booking.статус !== filterStatus) return false;
+    
+    // Фильтр по офису
+    if (filterOffice && booking.id_офиса !== parseInt(filterOffice)) return false;
+    
+    return true;
+  });
+
+  // Получаем уникальные офисы из броней для фильтра
+  const availableOffices = [...new Set(bookings
+    .map(b => b.id_офиса)
+    .filter(id => offices.some(o => o.id_офиса === id))
+  )].map(officeId => {
+    const office = offices.find(o => o.id_офиса === officeId);
+    return {
+      id: officeId,
+      number: office?.номер_офиса || officeId
+    };
+  }).sort((a, b) => a.number - b.number);
 
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
 
@@ -1311,21 +1489,33 @@ const BookingsTab = () => {
     <div>
       <div className="flex justify-between items-center mb-6">
         <h2 className="text-2xl font-bold text-gray-800">Брони</h2>
-        {user?.role === 'tenant' && (
-          <button
-            onClick={() => setShowModal(true)}
-            className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
-          >
-            <Plus className="w-5 h-5" />
-            Забронировать офис
-          </button>
-        )}
+        <div className="flex gap-2">
+          {/* Кнопка проверки истекших броней (только для админов) */}
+          {user?.role === 'admin' && (
+            <button
+              onClick={() => setShowCheckModal(true)}
+              className="flex items-center gap-2 bg-yellow-600 text-white px-4 py-2 rounded-lg hover:bg-yellow-700"
+            >
+              <RefreshCw className="w-5 h-5" />
+              Проверить истекшие
+            </button>
+          )}
+          {user?.role === 'tenant' && (
+            <button
+              onClick={() => setShowModal(true)}
+              className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700"
+            >
+              <Plus className="w-5 h-5" />
+              Забронировать офис
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Фильтр для админа */}
+      {/* Фильтры для админа */}
       {user?.role === 'admin' && (
         <div className="bg-white rounded-lg shadow-md p-4 mb-6">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">Статус</label>
               <select
@@ -1339,12 +1529,30 @@ const BookingsTab = () => {
                 <option value="истекла">Истекла</option>
               </select>
             </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">Офис</label>
+              <select
+                value={filterOffice}
+                onChange={(e) => setFilterOffice(e.target.value)}
+                className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+              >
+                <option value="">Все офисы</option>
+                {availableOffices.map(office => (
+                  <option key={office.id} value={office.id}>
+                    Офис {office.number}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="flex items-end">
               <button
-                onClick={() => setFilterStatus('')}
+                onClick={() => {
+                  setFilterStatus('');
+                  setFilterOffice('');
+                }}
                 className="w-full px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300"
               >
-                Сбросить фильтр
+                Сбросить фильтры
               </button>
             </div>
           </div>
@@ -1355,7 +1563,9 @@ const BookingsTab = () => {
         <div className="bg-white rounded-lg shadow-md p-8 text-center">
           <Calendar className="w-16 h-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600 mb-4">
-            {bookings.length === 0 ? 'У вас пока нет бронирований' : 'Брони не найдены'}
+            {bookings.length === 0 
+              ? 'У вас пока нет бронирований' 
+              : 'Брони не найдены по выбранным фильтрам'}
           </p>
           {user?.role === 'tenant' && (
             <button
@@ -1387,7 +1597,7 @@ const BookingsTab = () => {
               {filteredBookings.map((booking) => (
                 <tr key={booking.id_брони}>
                   <td className="px-6 py-4 text-sm text-gray-900">
-                    Офис {offices.find(o => o.id_офиса === booking.id_офиса)?.номер_офиса || booking.id_офиса}
+                    {getOfficeNumber(booking.id_офиса)}
                   </td>
                   {user?.role === 'admin' && (
                     <td className="px-6 py-4 text-sm text-gray-600">
@@ -1429,6 +1639,59 @@ const BookingsTab = () => {
         </div>
       )}
 
+      {/* Модальное окно для проверки истекших броней */}
+      {showCheckModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-xl font-bold mb-4">Проверка истекших броней</h3>
+            
+            {checkResult ? (
+              <div className="space-y-4">
+                <div className={`p-4 rounded-lg ${
+                  checkResult.expired_count > 0 
+                    ? 'bg-green-100 text-green-800' 
+                    : 'bg-blue-100 text-blue-800'
+                }`}>
+                  <p className="font-medium">
+                    {checkResult.expired_count > 0
+                      ? `Найдено и обновлено ${checkResult.expired_count} истекших броней`
+                      : 'Истекших броней не найдено'
+                    }
+                  </p>
+                </div>
+                <div className="text-center">
+                  <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-green-600 mx-auto mb-2"></div>
+                  <p className="text-sm text-gray-600">Обновление данных...</p>
+                </div>
+              </div>
+            ) : (
+              <>
+                <p className="text-gray-600 mb-4">
+                  Эта операция проверит все активные брони и обновит статус на "истекла" для тех, у которых истек срок.
+                </p>
+                <div className="flex gap-2 pt-4">
+                  <button
+                    onClick={() => setShowCheckModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                    disabled={checkExpiredLoading}
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    onClick={handleCheckExpired}
+                    disabled={checkExpiredLoading}
+                    className="flex-1 px-4 py-2 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 disabled:opacity-50"
+                  >
+                    {checkExpiredLoading ? 'Проверка...' : 'Проверить'}
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Модальное окно для бронирования */}
       {showModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">

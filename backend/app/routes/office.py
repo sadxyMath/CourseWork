@@ -19,6 +19,7 @@ router = APIRouter(
 def get_offices(
     status: Optional[str] = Query(None, description="Фильтр по статусу офиса (свободен/арендуется)"),
     floor: Optional[int] = Query(None, description="Фильтр по этажу"),
+    office_number: Optional[str] = Query(None, description="Фильтр по номеру офиса"),
     db: Session = Depends(get_db),
     current_user = Depends(require_role(["admin", "tenant", "staff"]))
 ):
@@ -28,6 +29,8 @@ def get_offices(
         query = query.filter(Office.статус == status)
     if floor:
         query = query.filter(Office.этаж == floor)
+    if office_number:
+        query = query.filter(Office.номер_офиса.contains(office_number))
 
     offices = query.all()
     if not offices:

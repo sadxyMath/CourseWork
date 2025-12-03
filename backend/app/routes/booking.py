@@ -1,8 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Query
 from sqlalchemy.orm import Session
+from sqlalchemy import and_, or_, update
 from typing import List
 from backend.app import models, schemes
 from backend.app.database import get_db
+from datetime import datetime, date
 from backend.app.dependencies import require_role
 
 router = APIRouter(
@@ -137,3 +139,53 @@ def cancel_booking(
     booking.статус = "аннулирована"
     db.commit()
     return None
+
+
+@router.get("/check-expired")
+def check_expired_bookings(
+    db: Session = Depends(get_db),
+    current_user: schemes.TokenData = Depends(require_role(["admin", "staff"])),
+    auto_update: bool = Query(True, description="Автоматически обновлять статус")
+):
+    """
+    Проверяет истекшие бронирования.
+    По умолчанию автоматически обновляет статус на 'истекла'.
+    """
+    try:
+        # Находим активные брони, у которых истек срок
+        expired_bookings = db.query(models.Booking).filter(
+            and_(
+                models.Booking.статус == "активна",
+                models.Booking.окончание_брони < date.today()
+            )
+        ).all()
+        
+        expired_count = len(expired_bookings)
+        updated_ids = []
+        
+        # Если нужно автоматически обновить статус
+        if auto_update and expired_count > 0:
+            for booking in expired_bookings:
+                booking.статус = "истекла"
+                updated_ids.append(booking.id_брони)
+            
+            db.commit()
+            
+            # Обновляем каждый объект по отдельности
+            for booking in expired_bookings:
+                db.refresh(booking)  # Теперь правильно - передаем объект
+            
+        return {
+            "expired_count": expired_count,
+            "auto_updated": auto_update and expired_count > 0,
+            "updated_ids": updated_ids if auto_update else [],
+            "bookings": expired_bookings if not auto_update else [],
+            "message": f"Найдено {expired_count} истекших броней" + 
+                      (f", обновлено {len(updated_ids)}" if auto_update and updated_ids else "")
+        }
+        
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Ошибка при проверке истекших броней: {str(e)}"
+        )
