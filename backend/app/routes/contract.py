@@ -181,12 +181,16 @@ def delete_contract(
     # Меняем статус договора на "расторгнут"
     db_contract.статус = "расторгнут"
 
+    # Удаляем все платежи, связанные с договором
+    db.query(models.Payment).filter(models.Payment.id_договора == contract_id).delete()
+
     # Освобождаем офис, если связан
     if hasattr(db_contract, "офис") and db_contract.офис:
         db_contract.офис.статус = "свободен"
 
     db.commit()
     return None
+
 
 
 # POST /contracts/check-expired - проверка и завершение истекших договоров

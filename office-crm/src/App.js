@@ -305,6 +305,7 @@ const RequestsTab = () => {
   const { user } = useAuth();
   const [requests, setRequests] = useState([]);
   const [contracts, setContracts] = useState([]);
+  const [activeContracts, setActiveContracts] = useState([]); // Новое состояние для активных договоров
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
@@ -327,12 +328,21 @@ const RequestsTab = () => {
         api.getRequests(params),
         api.getContracts()
       ]);
+      
       setRequests(Array.isArray(requestsData) ? requestsData : []);
       setContracts(Array.isArray(contractsData) ? contractsData : []);
+      
+      // Фильтруем только активные договоры
+      const activeContractsData = contractsData.filter(contract => 
+        contract.статус === 'активен' || contract.статус === 'active'
+      );
+      setActiveContracts(activeContractsData);
+      
     } catch (error) {
       console.error(error);
       setRequests([]);
       setContracts([]);
+      setActiveContracts([]);
     } finally {
       setLoading(false);
     }
@@ -371,6 +381,16 @@ const RequestsTab = () => {
 
   const applyFilters = () => {
     loadData();
+  };
+
+  // Функция для получения номера офиса по ID договора
+  const getOfficeInfoForContract = (contractId) => {
+    const contract = contracts.find(c => c.id_договора === contractId);
+    if (!contract) return '';
+    
+    // Здесь можно добавить логику получения номера офиса
+    // Например, если в данных договора есть id_офиса или номер_офиса
+    return contract.id_офиса ? ` (Офис ${contract.id_офиса})` : '';
   };
 
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
@@ -487,51 +507,76 @@ const RequestsTab = () => {
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
           <div className="bg-white rounded-lg p-6 w-full max-w-md">
             <h3 className="text-xl font-bold mb-4">Новая заявка</h3>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Договор</label>
-                <select
-                  value={formData.id_договора}
-                  onChange={(e) => setFormData({ ...formData, id_договора: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  required
-                >
-                  <option value="">Выберите договор</option>
-                  {contracts.map((contract) => (
-                    <option key={contract.id_договора} value={contract.id_договора}>
-                      Договор №{contract.id_договора} (Офис {contract.id_офиса})
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">Текст заявки</label>
-                <textarea
-                  value={formData.текст_заявки}
-                  onChange={(e) => setFormData({ ...formData, текст_заявки: e.target.value })}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-lg"
-                  rows="4"
-                  placeholder="Опишите проблему подробно"
-                  maxLength="500"
-                  required
-                />
-              </div>
-              <div className="flex gap-2 pt-4">
+            
+            {activeContracts.length === 0 ? (
+              <div className="text-center py-4">
+                <p className="text-gray-600 mb-4">
+                  У вас нет активных договоров. Заявки можно создавать только для активных договоров.
+                </p>
                 <button
-                  type="button"
                   onClick={() => setShowModal(false)}
-                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  className="px-4 py-2 bg-gray-300 rounded-lg hover:bg-gray-400"
                 >
-                  Отмена
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
-                >
-                  Создать
+                  Закрыть
                 </button>
               </div>
-            </form>
+            ) : (
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Договор <span className="text-green-600">(только активные)</span>
+                  </label>
+                  <select
+                    value={formData.id_договора}
+                    onChange={(e) => setFormData({ ...formData, id_договора: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    required
+                  >
+                    <option value="">Выберите активный договор</option>
+                    {activeContracts.map((contract) => (
+                      <option key={contract.id_договора} value={contract.id_договора}>
+                        Договор №{contract.id_договора} 
+                        {contract.id_офиса && ` (Офис ${contract.id_офиса})`}
+                        {contract.статус && ` - ${contract.статус}`}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Доступно активных договоров: {activeContracts.length}
+                  </p>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">Текст заявки</label>
+                  <textarea
+                    value={formData.текст_заявки}
+                    onChange={(e) => setFormData({ ...formData, текст_заявки: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg"
+                    rows="4"
+                    placeholder="Опишите проблему подробно"
+                    maxLength="500"
+                    required
+                  />
+                  <p className="text-xs text-gray-500 mt-1">
+                    Максимум 500 символов. Осталось: {500 - (formData.текст_заявки?.length || 0)}
+                  </p>
+                </div>
+                <div className="flex gap-2 pt-4">
+                  <button
+                    type="button"
+                    onClick={() => setShowModal(false)}
+                    className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
+                  >
+                    Отмена
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  >
+                    Создать заявку
+                  </button>
+                </div>
+              </form>
+            )}
           </div>
         </div>
       )}
@@ -544,6 +589,10 @@ const RequestsTab = () => {
               Изменить статус заявки №{selectedRequest.id_заявки}
             </h3>
             <div className="space-y-4">
+              <div className="p-3 bg-gray-50 rounded-lg mb-2">
+                <p className="text-sm text-gray-600">Текущий статус:</p>
+                <p className="font-medium">{selectedRequest.статус}</p>
+              </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">Новый статус</label>
                 <select
@@ -551,6 +600,7 @@ const RequestsTab = () => {
                   onChange={(e) => setNewStatus(e.target.value)}
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 >
+                  <option value="">Выберите статус</option>
                   <option value="новая">Новая</option>
                   <option value="в работе">В работе</option>
                   <option value="выполнена">Выполнена</option>
@@ -563,6 +613,7 @@ const RequestsTab = () => {
                   onClick={() => {
                     setShowStatusModal(false);
                     setSelectedRequest(null);
+                    setNewStatus('');
                   }}
                   className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
                 >
@@ -570,7 +621,12 @@ const RequestsTab = () => {
                 </button>
                 <button
                   onClick={handleStatusChange}
-                  className="flex-1 px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700"
+                  disabled={!newStatus}
+                  className={`flex-1 px-4 py-2 rounded-lg ${
+                    newStatus 
+                      ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
+                      : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                  }`}
                 >
                   Сохранить
                 </button>
