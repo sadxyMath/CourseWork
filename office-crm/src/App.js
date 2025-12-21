@@ -305,7 +305,7 @@ const RequestsTab = () => {
   const { user } = useAuth();
   const [requests, setRequests] = useState([]);
   const [contracts, setContracts] = useState([]);
-  const [activeContracts, setActiveContracts] = useState([]); // Новое состояние для активных договоров
+  const [activeContracts, setActiveContracts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [showStatusModal, setShowStatusModal] = useState(false);
@@ -332,7 +332,6 @@ const RequestsTab = () => {
       setRequests(Array.isArray(requestsData) ? requestsData : []);
       setContracts(Array.isArray(contractsData) ? contractsData : []);
       
-      // Фильтруем только активные договоры
       const activeContractsData = contractsData.filter(contract => 
         contract.статус === 'активен' || contract.статус === 'active'
       );
@@ -383,14 +382,49 @@ const RequestsTab = () => {
     loadData();
   };
 
-  // Функция для получения номера офиса по ID договора
-  const getOfficeInfoForContract = (contractId) => {
-    const contract = contracts.find(c => c.id_договора === contractId);
-    if (!contract) return '';
+  // Функция для определения доступных статусов в зависимости от роли пользователя
+  const getAvailableStatuses = () => {
+    const allStatuses = [
+      { value: 'новая', label: 'Новая' },
+      { value: 'в работе', label: 'В работе' },
+      { value: 'выполнена', label: 'Выполнена' },
+      { value: 'отклонена', label: 'Отклонена' }
+    ];
+
+    if (user?.role === 'admin') {
+      return allStatuses;
+    } else if (user?.role === 'staff') {
+      // Персонал может менять только на "в работе" и "выполнена"
+      return allStatuses.filter(status => 
+        status.value === 'в работе' || status.value === 'выполнена'
+      );
+    }
     
-    // Здесь можно добавить логику получения номера офиса
-    // Например, если в данных договора есть id_офиса или номер_офиса
-    return contract.id_офиса ? ` (Офис ${contract.id_офиса})` : '';
+    return [];
+  };
+
+  // Функция для проверки, может ли пользователь изменить статус заявки
+  const canChangeStatus = (requestStatus) => {
+    if (user?.role === 'admin') return true;
+    
+    if (user?.role === 'staff') {
+      // Персонал может менять статус только у заявок со статусом "новая" или "в работе"
+      return requestStatus === 'новая' || requestStatus === 'в работе';
+    }
+    
+    return false;
+  };
+
+  // Функция для получения текста кнопки в зависимости от текущего статуса
+  const getStatusButtonText = (requestStatus) => {
+    if (user?.role === 'admin') return 'Изменить статус';
+    
+    if (user?.role === 'staff') {
+      if (requestStatus === 'новая') return 'Взять в работу';
+      if (requestStatus === 'в работе') return 'Завершить работу';
+    }
+    
+    return 'Изменить статус';
   };
 
   if (loading) return <div className="text-center py-8">Загрузка...</div>;
@@ -488,12 +522,12 @@ const RequestsTab = () => {
                 Создана: {new Date(request.дата_подачи).toLocaleDateString('ru-RU')}
               </p>
               <div className="flex gap-2">
-                {(user?.role === 'admin' || user?.role === 'staff') && (
+                {(user?.role === 'admin' || user?.role === 'staff') && canChangeStatus(request.статус) && (
                   <button
                     onClick={() => openStatusModal(request)}
                     className="px-4 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 text-sm"
                   >
-                    Изменить статус
+                    {getStatusButtonText(request.статус)}
                   </button>
                 )}
               </div>
@@ -601,11 +635,33 @@ const RequestsTab = () => {
                   className="w-full px-3 py-2 border border-gray-300 rounded-lg"
                 >
                   <option value="">Выберите статус</option>
-                  <option value="новая">Новая</option>
-                  <option value="в работе">В работе</option>
-                  <option value="выполнена">Выполнена</option>
-                  <option value="отклонена">Отклонена</option>
+                  {getAvailableStatuses().map((status) => (
+                    <option 
+                      key={status.value} 
+                      value={status.value}
+                      // Для персонала предлагаем рекомендуемый следующий статус
+                      selected={
+                        user?.role === 'staff' && 
+                        selectedRequest.статус === 'новая' && 
+                        status.value === 'в работе'
+                      }
+                    >
+                      {status.label}
+                    </option>
+                  ))}
                 </select>
+                
+                {/* Подсказка для персонала */}
+                {user?.role === 'staff' && selectedRequest.статус === 'новая' && (
+                  <p className="text-xs text-indigo-600 mt-1">
+                    ⓘ Рекомендуется изменить статус на "В работе"
+                  </p>
+                )}
+                {user?.role === 'staff' && selectedRequest.статус === 'в работе' && (
+                  <p className="text-xs text-indigo-600 mt-1">
+                    ⓘ Вы можете отметить заявку как выполненную
+                  </p>
+                )}
               </div>
               <div className="flex gap-2 pt-4">
                 <button
@@ -621,9 +677,9 @@ const RequestsTab = () => {
                 </button>
                 <button
                   onClick={handleStatusChange}
-                  disabled={!newStatus}
+                  disabled={!newStatus || newStatus === selectedRequest.статус}
                   className={`flex-1 px-4 py-2 rounded-lg ${
-                    newStatus 
+                    newStatus && newStatus !== selectedRequest.статус
                       ? 'bg-indigo-600 text-white hover:bg-indigo-700' 
                       : 'bg-gray-300 text-gray-500 cursor-not-allowed'
                   }`}
@@ -1045,15 +1101,26 @@ const Sidebar = ({ activeTab, setActiveTab, isMobile, isOpen, setIsOpen }) => {
   const { user, logout } = useAuth();
 
   const menuItems = [
-    { id: 'offices', label: 'Офисы', icon: Building2, roles: ['admin', 'tenant', 'staff'] },
-    { id: 'bookings', label: 'Брони', icon: Calendar, roles: ['admin', 'tenant', 'staff'] },
+    { id: 'offices', label: 'Офисы', icon: Building2, roles: ['admin', 'tenant'] }, // Убрали 'staff'
+    { id: 'bookings', label: 'Брони', icon: Calendar, roles: ['admin', 'tenant'] }, // Убрали 'staff'
     { id: 'contracts', label: 'Договоры', icon: FileText, roles: ['admin', 'tenant'] },
-    { id: 'payments', label: 'Платежи', icon: CreditCard, roles: ['admin', 'tenant', 'staff'] },
-    { id: 'requests', label: 'Заявки', icon: ClipboardList, roles: ['admin', 'tenant', 'staff'] },
-    { id: 'tenants', label: 'Арендаторы', icon: Users, roles: ['admin', 'staff'] },
+    { id: 'payments', label: 'Платежи', icon: CreditCard, roles: ['admin', 'tenant'] }, // Убрали 'staff'
+    { id: 'requests', label: 'Заявки', icon: ClipboardList, roles: ['admin', 'tenant', 'staff'] }, // Оставили 'staff'
+    { id: 'tenants', label: 'Арендаторы', icon: Users, roles: ['admin'] }, // Убрали 'staff'
   ];
 
-  const filteredItems = menuItems.filter(item => item.roles.includes(user?.role));
+  // Фильтруем пункты меню в зависимости от роли
+  const filteredItems = menuItems.filter(item => {
+    if (!user?.role) return false;
+    
+    // Для персонала показываем ТОЛЬКО "Заявки"
+    if (user.role === 'staff') {
+      return item.id === 'requests';
+    }
+    
+    // Для остальных ролей - все что положено
+    return item.roles.includes(user.role);
+  });
 
   const getRoleName = (role) => {
     switch(role) {
@@ -1824,7 +1891,7 @@ const BookingsTab = () => {
   );
 };
 
-// Contracts Tab
+/// Contracts Tab
 const ContractsTab = () => {
   const { user } = useAuth();
   const [contracts, setContracts] = useState([]);
@@ -1890,8 +1957,20 @@ const ContractsTab = () => {
         user?.role === 'admin' ? api.getTenants() : Promise.resolve([])
       ]);
       
-      setOffices(officesData);
-      setTenants(tenantsData);
+      // Сортируем офисы по номеру офиса (по алфавиту)
+      const sortedOffices = [...officesData].sort((a, b) => {
+        return (a.номер_офиса || '').localeCompare(b.номер_офиса || '');
+      });
+      
+      // Сортируем арендаторов по названию компании или имени (по алфавиту)
+      const sortedTenants = [...tenantsData].sort((a, b) => {
+        const nameA = a.название_компании || a.фио || a.имя || '';
+        const nameB = b.название_компании || b.фио || b.имя || '';
+        return nameA.localeCompare(nameB);
+      });
+      
+      setOffices(sortedOffices);
+      setTenants(sortedTenants);
     } catch (error) {
       console.error('Ошибка загрузки данных для модалки:', error);
       setOffices([]);
@@ -2001,7 +2080,7 @@ const ContractsTab = () => {
           contract.id_договора.toString().includes(searchLower) ||
           contract.id_офиса.toString().includes(searchLower) ||
           contract.id_арендатора.toString().includes(searchLower) ||
-          (contract.номер_офиса && contract.номер_офиса.toLowerCase().includes(searchLower)) // Добавляем поиск по номеру офиса
+          (contract.номер_офиса && contract.номер_офиса.toLowerCase().includes(searchLower))
         );
       }
       return true;
@@ -2072,7 +2151,8 @@ const ContractsTab = () => {
               )}
             </button>
           )}
-          {(user?.role === 'tenant' || user?.role === 'admin') && (
+          {/* Кнопку создания договора показываем ТОЛЬКО для администратора */}
+          {user?.role === 'admin' && (
             <button
               onClick={handleOpenModal}
               className="flex items-center gap-2 bg-indigo-600 text-white px-4 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
@@ -2212,7 +2292,8 @@ const ContractsTab = () => {
           <p className="text-gray-600 mb-4">
             {contracts.length === 0 ? 'У вас пока нет договоров' : 'Договоры не найдены'}
           </p>
-          {(user?.role === 'tenant' || user?.role === 'admin') && (
+          {/* Кнопку создания показываем только администратору */}
+          {user?.role === 'admin' && (
             <button
               onClick={handleOpenModal}
               className="bg-indigo-600 text-white px-6 py-2 rounded-lg hover:bg-indigo-700 transition-colors"
@@ -2344,10 +2425,14 @@ const ContractsTab = () => {
                       <option value="">Выберите арендатора</option>
                       {tenants.map((tenant) => (
                         <option key={tenant.id_арендатора} value={tenant.id_арендатора}>
-                          {tenant.название_компании} (ID: {tenant.id_арендатора})
+                          {tenant.название_компании || tenant.фио || tenant.имя || `ID: ${tenant.id_арендатора}`} 
+                          (ID: {tenant.id_арендатора})
                         </option>
                       ))}
                     </select>
+                    <p className="text-xs text-gray-500 mt-1">
+                      Отсортировано по названию компании/имени
+                    </p>
                   </div>
                 )}
                 
@@ -2366,6 +2451,9 @@ const ContractsTab = () => {
                       </option>
                     ))}
                   </select>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Отсортировано по номеру офиса
+                  </p>
                 </div>
                 
                 <div className="grid grid-cols-2 gap-4">
@@ -2528,7 +2616,7 @@ const ContractsTab = () => {
               </div>
             )}
 
-            {(!user?.role === 'admin' || selectedContract.статус !== 'активен') && (
+            {(user?.role !== 'admin' || selectedContract.статус !== 'активен') && (
               <div className="mt-6 pt-6 border-t border-gray-200">
                 <button
                   onClick={() => setShowDetailsModal(false)}
